@@ -1,0 +1,3 @@
+{"id":"summary-ko","prompt":"OCI Generative AI benchmark를 왜 수행하는지 세 문장으로 설명해줘."}
+{"id":"table-en","prompt":"Create a compact markdown table comparing latency, cost, and quality tradeoffs for small vs large LLMs."}
+{"id":"ops-checklist","messages":[{"role":"system","content":"Answer in Korean and keep the structure tight."},{"role":"user","content":"운영 환경에서 GenAI 모델 benchmark를 수행할 때 확인해야 할 체크리스트 6개를 작성해줘."}]}

@@ -1,0 +1,2 @@
+"""GenAI benchmark package."""
+
