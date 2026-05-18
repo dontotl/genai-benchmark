@@ -40,6 +40,13 @@ OCI Generative AI OpenAI-compatible endpoint를 대상으로 프롬프트 세트
 - [runs/cross-region-smoke-r1.md](runs/cross-region-smoke-r1.md)
 - [runs/baseline-osaka-r3.md](runs/baseline-osaka-r3.md)
 
+### Osaka Smoke Checks (`repeats=1`)
+
+최근 기능 검증용 smoke 실행:
+
+- `osaka-streaming-smoke-r1`: OpenAI streaming은 `3/3` 성공, Gemini streaming은 `2/3` 성공했고 `ops-checklist`에서 HTTP 500이 재현됐습니다.
+- `osaka-ramp-smoke-c1-c5-r1`: concurrency `1,5`에서 OpenAI/Gemini 기본 non-streaming 요청이 모두 성공했습니다.
+
 ## What This Repo Includes
 
 ```text
