@@ -6,6 +6,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from .catalog import DEFAULT_FAMILIES, format_model_listing, get_family_names, resolve_models
 from .reporting import render_markdown
@@ -63,6 +64,14 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Maximum number of concurrent requests per model/region/case.",
     )
+    parser.add_argument(
+        "--concurrency-levels",
+        default="",
+        help=(
+            "Comma-separated concurrency levels for a ramp run, e.g. 1,5,10. "
+            "When set, this overrides --concurrency."
+        ),
+    )
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument(
@@ -114,6 +123,30 @@ def resolve_regions(args: argparse.Namespace) -> list[str]:
     return ordered
 
 
+def parse_concurrency_levels(raw_value: str, fallback: int) -> list[int]:
+    if fallback < 1:
+        raise SystemExit("--concurrency must be 1 or greater.")
+    if not raw_value:
+        return [fallback]
+
+    levels: list[int] = []
+    seen = set()
+    for raw_item in raw_value.split(","):
+        item = raw_item.strip()
+        if not item:
+            raise SystemExit("--concurrency-levels must be a comma-separated list of positive integers.")
+        try:
+            value = int(item)
+        except ValueError as exc:
+            raise SystemExit("--concurrency-levels must contain only positive integers.") from exc
+        if value < 1:
+            raise SystemExit("--concurrency-levels values must be 1 or greater.")
+        if value not in seen:
+            levels.append(value)
+            seen.add(value)
+    return levels
+
+
 def print_dry_run(
     cases: list[Any],
     selected_models: list[Any],
@@ -123,6 +156,7 @@ def print_dry_run(
     args: argparse.Namespace,
     prompt_path: Path,
 ) -> None:
+    concurrency_levels = getattr(args, "resolved_concurrency_levels", [args.concurrency])
     print(f"Loaded {len(cases)} benchmark cases from {prompt_path}.")
     print(f"Source label: {args.source_label or 'unspecified'}")
     print(f"Requested regions: {', '.join(regions)}")
@@ -130,9 +164,9 @@ def print_dry_run(
     print("Selected models:")
     for model in selected_models:
         print(f"- {model.model_id} [{model.family}]")
-    print(f"Concurrency: {args.concurrency}")
+    print(f"Concurrency levels: {', '.join(str(level) for level in concurrency_levels)}")
     print(f"Runnable region/model targets: {len(execution_targets)}")
-    print(f"Planned requests: {len(cases) * len(execution_targets) * args.repeats}")
+    print(f"Planned requests: {len(cases) * len(execution_targets) * args.repeats * len(concurrency_levels)}")
     for case in cases:
         print(f"- case {case.case_id}: {len(case.messages)} message(s)")
     if skipped:
@@ -158,8 +192,7 @@ def main() -> int:
     if args.list_models:
         print(format_model_listing())
         return 0
-    if args.concurrency < 1:
-        raise SystemExit("--concurrency must be 1 or greater.")
+    args.resolved_concurrency_levels = parse_concurrency_levels(args.concurrency_levels, args.concurrency)
 
     selected_models = resolve_models(args.families, args.models, args.include_experimental)
     regions = resolve_regions(args)

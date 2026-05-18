@@ -64,6 +64,7 @@ def aggregate_family_metrics(reports: list[dict]) -> list[dict]:
                     "successes": 0,
                     "failures": 0,
                     "latencies": [],
+                    "tokens_per_second": [],
                 },
             )
             bucket["attempts"] += item["attempts"]
@@ -71,6 +72,8 @@ def aggregate_family_metrics(reports: list[dict]) -> list[dict]:
             bucket["failures"] += item["failures"]
             if item["avg_latency_seconds"] is not None:
                 bucket["latencies"].append(item["avg_latency_seconds"])
+            if item.get("avg_output_tokens_per_second") is not None:
+                bucket["tokens_per_second"].append(item["avg_output_tokens_per_second"])
 
     rows = []
     for (_, _), bucket in sorted(buckets.items()):
@@ -79,6 +82,11 @@ def aggregate_family_metrics(reports: list[dict]) -> list[dict]:
         success_rate = (successes / attempts) * 100 if attempts else 0.0
         avg_latency = (
             sum(bucket["latencies"]) / len(bucket["latencies"]) if bucket["latencies"] else None
+        )
+        avg_tokens_per_second = (
+            sum(bucket["tokens_per_second"]) / len(bucket["tokens_per_second"])
+            if bucket["tokens_per_second"]
+            else None
         )
         rows.append(
             {
@@ -89,6 +97,7 @@ def aggregate_family_metrics(reports: list[dict]) -> list[dict]:
                 "failures": bucket["failures"],
                 "success_rate": success_rate,
                 "avg_latency": avg_latency,
+                "avg_tokens_per_second": avg_tokens_per_second,
             }
         )
     return rows
@@ -103,16 +112,20 @@ def aggregate_case_metrics(reports: list[dict]) -> list[dict]:
             rows.append(
                 {
                     "report": report["name"],
+                    "region": item["region"],
                     "family": item["family"],
                     "model": item["model"],
                     "case_id": item["case_id"],
+                    "concurrency": item.get("concurrency", 1),
                     "attempts": attempts,
                     "successes": successes,
                     "failures": item["failures"],
                     "success_rate": (successes / attempts) * 100 if attempts else 0.0,
                     "avg_latency": item["avg_latency_seconds"],
                     "p95_latency": item["p95_latency_seconds"],
+                    "p99_latency": item.get("p99_latency_seconds"),
                     "avg_tokens": item["avg_total_tokens"],
+                    "avg_tokens_per_second": item.get("avg_output_tokens_per_second"),
                 }
             )
     return rows
@@ -126,15 +139,55 @@ def collect_failures(reports: list[dict]) -> list[dict]:
                 failures.append(
                     {
                         "report": report["name"],
+                        "region": item["region"],
                         "family": item["family"],
                         "model": item["model"],
                         "case_id": item["case_id"],
+                        "concurrency": item.get("concurrency", 1),
                         "iteration": item["iteration"],
                         "latency": item["latency_seconds"],
                         "error": item["error"],
+                        "error_type": item.get("error_type"),
+                        "http_status": item.get("http_status"),
+                        "response_body_preview": item.get("response_body_preview"),
+                        "request_id": item.get("request_id"),
                     }
                 )
     return failures
+
+
+def collect_filter_options(rows: list[dict]) -> dict[str, list[str]]:
+    return {
+        "regions": sorted({row["region"] for row in rows if row.get("region")}),
+        "models": sorted({row["model"] for row in rows if row.get("model")}),
+        "concurrency": sorted({str(row["concurrency"]) for row in rows}, key=lambda value: int(value)),
+    }
+
+
+def collect_failure_summary(failures: list[dict]) -> list[dict]:
+    buckets: dict[tuple[str, str, str, str, str], int] = defaultdict(int)
+    for failure in failures:
+        key = (
+            failure["report"],
+            failure["family"],
+            failure["model"],
+            str(failure["http_status"] or "-"),
+            failure["error_type"] or "-",
+        )
+        buckets[key] += 1
+    return [
+        {
+            "report": report,
+            "family": family,
+            "model": model,
+            "http_status": http_status,
+            "error_type": error_type,
+            "count": count,
+        }
+        for (report, family, model, http_status, error_type), count in sorted(
+            buckets.items(), key=lambda item: (-item[1], item[0])
+        )
+    ]
 
 
 def css() -> str:
@@ -182,6 +235,34 @@ h1, h2 {
 .section {
   margin-top: 34px;
 }
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin: 20px 0 28px;
+  padding: 14px;
+  background: #fffdf9;
+  border: 1px solid #ddd4c7;
+  border-radius: 12px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.field label {
+  color: #6b635b;
+  font-size: 13px;
+  font-weight: 600;
+}
+.field select {
+  border: 1px solid #cfc5b6;
+  border-radius: 8px;
+  background: #fffaf2;
+  color: #1d1b18;
+  font: inherit;
+  padding: 8px 10px;
+}
 .chart-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -195,6 +276,9 @@ h1, h2 {
 }
 .bar-row {
   margin: 14px 0;
+}
+.filtered-out {
+  display: none;
 }
 .bar-label {
   display: flex;
@@ -334,10 +418,12 @@ def render_case_bars(rows: list[dict], metric: str, title: str, value_suffix: st
     for row in rows:
         raw_value = row[metric] or 0
         width = (raw_value / max_value * 100) if max_value else 0
-        label = f"{row['report']} / {row['family']} / {row['case_id']}"
+        label = f"{row['report']} / {row['family']} / {row['case_id']} / c{row['concurrency']}"
         shown = f"{raw_value:.1f}{value_suffix}" if isinstance(raw_value, float) else f"{raw_value}{value_suffix}"
         chunks.append(
-            "<div class='bar-row'>"
+            "<div class='bar-row filterable' "
+            f"data-region='{escape(row['region'])}' data-model='{escape(row['model'])}' "
+            f"data-concurrency='{row['concurrency']}'>"
             f"<div class='bar-label'><span>{escape(label)}</span><span>{escape(shown)}</span></div>"
             "<div class='bar-track'>"
             f"<div class='bar-fill {escape(row['family'])}' style='width:{width:.1f}%'></div>"
@@ -378,24 +464,37 @@ def render_case_table(rows: list[dict]) -> str:
     for row in rows:
         latency = f"{row['avg_latency']:.3f}s" if row["avg_latency"] is not None else "-"
         p95 = f"{row['p95_latency']:.3f}s" if row["p95_latency"] is not None else "-"
+        p99 = f"{row['p99_latency']:.3f}s" if row["p99_latency"] is not None else "-"
         tokens = f"{row['avg_tokens']:.1f}" if row["avg_tokens"] is not None else "-"
+        tokens_per_second = (
+            f"{row['avg_tokens_per_second']:.3f}" if row["avg_tokens_per_second"] is not None else "-"
+        )
         body.append(
-            "<tr>"
+            "<tr class='filterable sortable-row' "
+            f"data-region='{escape(row['region'])}' data-model='{escape(row['model'])}' "
+            f"data-concurrency='{row['concurrency']}' data-success-rate='{row['success_rate']:.6f}' "
+            f"data-avg-latency='{row['avg_latency'] if row['avg_latency'] is not None else ''}' "
+            f"data-p99-latency='{row['p99_latency'] if row['p99_latency'] is not None else ''}' "
+            f"data-throughput='{row['avg_tokens_per_second'] if row['avg_tokens_per_second'] is not None else ''}'>"
             f"<td><code>{escape(row['report'])}</code></td>"
+            f"<td><code>{escape(row['region'])}</code></td>"
             f"<td><span class='pill {escape(row['family'])}'>{escape(row['family'])}</span></td>"
             f"<td><code>{escape(row['model'])}</code></td>"
             f"<td><code>{escape(row['case_id'])}</code></td>"
+            f"<td>{row['concurrency']}</td>"
             f"<td>{row['successes']}/{row['attempts']}</td>"
             f"<td>{row['success_rate']:.1f}%</td>"
             f"<td>{latency}</td>"
             f"<td>{p95}</td>"
+            f"<td>{p99}</td>"
             f"<td>{tokens}</td>"
+            f"<td>{tokens_per_second}</td>"
             "</tr>"
         )
     return (
         "<div class='section'><h2>Case Detail</h2><table><thead><tr>"
-        "<th>Report</th><th>Family</th><th>Model</th><th>Case</th><th>Success</th><th>Success Rate</th><th>Avg Latency</th><th>P95</th><th>Avg Tokens</th>"
-        "</tr></thead><tbody>"
+        "<th>Report</th><th>Region</th><th>Family</th><th>Model</th><th>Case</th><th>Concurrency</th><th>Success</th><th>Success Rate</th><th>Avg Latency</th><th>P95</th><th>P99</th><th>Avg Tokens</th><th>Avg E2E Output Tokens/sec</th>"
+        "</tr></thead><tbody id='case-detail-body'>"
         + "".join(body)
         + "</tbody></table></div>"
     )
@@ -426,15 +525,17 @@ def render_scatter(rows: list[dict], title: str) -> str:
         x = pad_left + (row["avg_tokens"] / max_tokens) * plot_width
         y = pad_top + plot_height - (row["avg_latency"] / max_latency) * plot_height
         label = (
-            f"{row['report']} / {row['family']} / {row['case_id']} "
+            f"{row['report']} / {row['family']} / {row['case_id']} / c{row['concurrency']} "
             f"(tokens={row['avg_tokens']:.1f}, latency={row['avg_latency']:.3f}s)"
         )
         points.append(
+            "<g class='filterable' "
+            f"data-region='{escape(row['region'])}' data-model='{escape(row['model'])}' "
+            f"data-concurrency='{row['concurrency']}'>"
             f"<circle cx='{x:.1f}' cy='{y:.1f}' r='6' class='dot {escape(row['family'])}'>"
             f"<title>{escape(label)}</title></circle>"
-        )
-        points.append(
-            f"<text x='{x + 8:.1f}' y='{y - 8:.1f}' class='dot-label'>{escape(row['family'])}:{escape(row['case_id'])}</text>"
+            f"<text x='{x + 8:.1f}' y='{y - 8:.1f}' class='dot-label'>{escape(row['family'])}:{escape(row['case_id'])}:c{row['concurrency']}</text>"
+            "</g>"
         )
 
     ticks = []
@@ -485,30 +586,147 @@ def render_failures_table(failures: list[dict]) -> str:
         return "<div class='section'><h2>Failures</h2><p class='muted'>No failures recorded.</p></div>"
     rows = []
     for failure in failures:
+        status = failure["http_status"] if failure["http_status"] is not None else "-"
+        request_id = failure["request_id"] or "-"
+        error_type = failure["error_type"] or "-"
+        body_preview = failure["response_body_preview"] or "-"
         rows.append(
-            "<tr>"
+            "<tr class='filterable' "
+            f"data-region='{escape(failure.get('region') or '')}' data-model='{escape(failure['model'])}' "
+            f"data-concurrency='{failure['concurrency']}'>"
             f"<td><code>{escape(failure['report'])}</code></td>"
+            f"<td><code>{escape(failure.get('region') or '-')}</code></td>"
             f"<td><span class='pill {escape(failure['family'])}'>{escape(failure['family'])}</span></td>"
             f"<td><code>{escape(failure['model'])}</code></td>"
             f"<td><code>{escape(failure['case_id'])}</code></td>"
+            f"<td>{failure['concurrency']}</td>"
             f"<td>{failure['iteration']}</td>"
             f"<td>{failure['latency']:.3f}s</td>"
+            f"<td>{escape(error_type)}</td>"
+            f"<td>{status}</td>"
+            f"<td>{escape(request_id)}</td>"
             f"<td>{escape(failure['error'])}</td>"
+            f"<td>{escape(body_preview)}</td>"
             "</tr>"
         )
     return (
         "<div class='section'><h2>Failures</h2><table><thead><tr>"
-        "<th>Report</th><th>Family</th><th>Model</th><th>Case</th><th>Iter</th><th>Latency</th><th>Error</th>"
+        "<th>Report</th><th>Region</th><th>Family</th><th>Model</th><th>Case</th><th>Concurrency</th><th>Iter</th><th>Latency</th><th>Type</th><th>HTTP</th><th>Request ID</th><th>Error</th><th>Body Preview</th>"
         "</tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table></div>"
     )
 
 
+def render_failure_summary_table(rows: list[dict]) -> str:
+    if not rows:
+        return "<div class='section'><h2>Failure Summary</h2><p class='muted'>No failures recorded.</p></div>"
+    body = []
+    for row in rows:
+        body.append(
+            "<tr>"
+            f"<td><code>{escape(row['report'])}</code></td>"
+            f"<td><span class='pill {escape(row['family'])}'>{escape(row['family'])}</span></td>"
+            f"<td><code>{escape(row['model'])}</code></td>"
+            f"<td>{escape(row['http_status'])}</td>"
+            f"<td>{escape(row['error_type'])}</td>"
+            f"<td>{row['count']}</td>"
+            "</tr>"
+        )
+    return (
+        "<div class='section'><h2>Failure Summary</h2><table><thead><tr>"
+        "<th>Report</th><th>Family</th><th>Model</th><th>HTTP</th><th>Type</th><th>Count</th>"
+        "</tr></thead><tbody>"
+        + "".join(body)
+        + "</tbody></table></div>"
+    )
+
+
+def render_filter_controls(options: dict[str, list[str]]) -> str:
+    def option_tags(values: list[str]) -> str:
+        return "<option value=''>All</option>" + "".join(
+            f"<option value='{escape(value)}'>{escape(value)}</option>" for value in values
+        )
+
+    return (
+        "<div class='filters' aria-label='Dashboard filters'>"
+        "<div class='field'><label for='region-filter'>Region</label>"
+        f"<select id='region-filter' data-filter='region'>{option_tags(options['regions'])}</select></div>"
+        "<div class='field'><label for='model-filter'>Model</label>"
+        f"<select id='model-filter' data-filter='model'>{option_tags(options['models'])}</select></div>"
+        "<div class='field'><label for='concurrency-filter'>Concurrency</label>"
+        f"<select id='concurrency-filter' data-filter='concurrency'>{option_tags(options['concurrency'])}</select></div>"
+        "<div class='field'><label for='case-sort'>Case Table Sort</label>"
+        "<select id='case-sort'>"
+        "<option value='successRate:asc'>Success Rate Asc</option>"
+        "<option value='avgLatency:desc'>Avg Latency Desc</option>"
+        "<option value='avgLatency:asc'>Avg Latency Asc</option>"
+        "<option value='p99Latency:desc'>P99 Latency Desc</option>"
+        "<option value='throughput:desc'>E2E Output Tokens/sec Desc</option>"
+        "</select></div>"
+        "</div>"
+    )
+
+
+def javascript() -> str:
+    return """
+function selectedFilters() {
+  return {
+    region: document.querySelector('[data-filter="region"]').value,
+    model: document.querySelector('[data-filter="model"]').value,
+    concurrency: document.querySelector('[data-filter="concurrency"]').value
+  };
+}
+function matchesFilters(element, filters) {
+  return (!filters.region || element.dataset.region === filters.region)
+    && (!filters.model || element.dataset.model === filters.model)
+    && (!filters.concurrency || element.dataset.concurrency === filters.concurrency);
+}
+function applyFilters() {
+  const filters = selectedFilters();
+  document.querySelectorAll('.filterable').forEach((element) => {
+    element.classList.toggle('filtered-out', !matchesFilters(element, filters));
+  });
+}
+function numericValue(row, key) {
+  const raw = row.dataset[key] || '';
+  if (raw === '') {
+    return Number.NEGATIVE_INFINITY;
+  }
+  return Number(raw);
+}
+function sortCaseRows() {
+  const select = document.getElementById('case-sort');
+  const body = document.getElementById('case-detail-body');
+  if (!select || !body) {
+    return;
+  }
+  const [key, direction] = select.value.split(':');
+  const rows = Array.from(body.querySelectorAll('.sortable-row'));
+  rows.sort((left, right) => {
+    const delta = numericValue(left, key) - numericValue(right, key);
+    return direction === 'asc' ? delta : -delta;
+  });
+  rows.forEach((row) => body.appendChild(row));
+}
+document.querySelectorAll('[data-filter]').forEach((control) => {
+  control.addEventListener('change', applyFilters);
+});
+const sortControl = document.getElementById('case-sort');
+if (sortControl) {
+  sortControl.addEventListener('change', sortCaseRows);
+}
+sortCaseRows();
+applyFilters();
+"""
+
+
 def render_html(reports: list[dict]) -> str:
     family_rows = aggregate_family_metrics(reports)
     case_rows = aggregate_case_metrics(reports)
     failures = collect_failures(reports)
+    failure_summary = collect_failure_summary(failures)
+    filter_options = collect_filter_options(case_rows)
     total_attempts = sum(row["attempts"] for row in family_rows)
     total_successes = sum(row["successes"] for row in family_rows)
     total_failures = sum(row["failures"] for row in family_rows)
@@ -543,6 +761,7 @@ def render_html(reports: list[dict]) -> str:
     <h1>GenAI Benchmark Dashboard</h1>
     <p class="lede">Generated from current JSON results in <code>runs/</code>. This view is static and self-contained, so you can open it directly in a browser.</p>
     <div class="cards">{card_html}</div>
+    {render_filter_controls(filter_options)}
     <div class="chart-grid">
       {render_bars(family_rows, 'success_rate', 'Success Rate by Report / Family', '%')}
       {render_bars(family_rows, 'avg_latency', 'Average Latency by Report / Family', 's')}
@@ -557,14 +776,11 @@ def render_html(reports: list[dict]) -> str:
     </div>
     <div class="chart-grid">
       {render_case_bars(case_rows, 'avg_tokens', 'Average Tokens by Case', '')}
-      <div class='panel'>
-        <h2>Token Notes</h2>
-        <p class="muted">Token bars use the benchmark summary's <code>avg_total_tokens</code> value. Failed requests stay at zero because the current runner only records token usage for successful responses.</p>
-      </div>
+      {render_case_bars(case_rows, 'avg_tokens_per_second', 'Average E2E Output Tokens/sec by Case', '')}
     </div>
     <div class="section">
       <h2>Efficiency View</h2>
-      <p class="muted">This chart compares token volume and latency together so you can spot slower responses that are not simply explained by larger outputs.</p>
+      <p class="muted">Throughput uses end-to-end latency, so it is useful for client-observed efficiency but does not separate TTFT from generation speed.</p>
     </div>
     <div class="chart-grid">
       {render_scatter(case_rows, 'Latency vs Tokens Scatter')}
@@ -575,11 +791,13 @@ def render_html(reports: list[dict]) -> str:
     </div>
     {render_reports_table(reports)}
     {render_case_table(case_rows)}
+    {render_failure_summary_table(failure_summary)}
     {render_failures_table(failures)}
     <div class="section">
       <div class="muted">Generated at {escape(generated_at)}</div>
     </div>
   </div>
+  <script>{javascript()}</script>
 </body>
 </html>
 """

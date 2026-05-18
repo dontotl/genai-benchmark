@@ -4,6 +4,7 @@ OCI Generative AI OpenAI-compatible endpoint를 대상으로 프롬프트 세트
 모델별 지연시간, 토큰 사용량, 성공률을 비교하는 Python CLI 프로젝트입니다.
 
 기본 실행 대상은 `OpenAI`와 `Gemini`이며, `Grok`과 `Meta`는 명시적으로 선택해서 테스트할 수 있습니다.
+현재 리포트는 평균/p95/p99 latency, end-to-end output tokens/sec, 실패 응답 상세정보를 함께 기록합니다.
 
 ## Dashboard Preview
 
@@ -157,6 +158,16 @@ python benchmark.py \
   --report-name cross-region-baseline-r3
 ```
 
+Concurrency ramp:
+
+```bash
+python benchmark.py \
+  --region ap-osaka-1 \
+  --repeats 3 \
+  --concurrency-levels 1,5,10 \
+  --report-name osaka-ramp-c1-c5-c10
+```
+
 실험용 family 실행:
 
 ```bash
@@ -175,7 +186,28 @@ python benchmark.py \
 - `runs/<report-name>.json`
 - `runs/<report-name>.md`
 
+리포트 summary는 아래 지표를 포함합니다.
+
+| Metric | Meaning |
+| --- | --- |
+| `avg_latency_seconds` | 성공 요청의 평균 end-to-end latency |
+| `p95_latency_seconds` | 성공 요청 latency의 p95 |
+| `p99_latency_seconds` | 성공 요청 latency의 p99 |
+| `avg_total_tokens` | token usage가 있는 성공 요청의 평균 total tokens |
+| `avg_output_tokens_per_second` | `output_tokens / end-to-end latency` 평균 |
+
+`avg_output_tokens_per_second`는 클라이언트가 체감한 전체 latency 기준 처리량입니다.
+streaming TTFT 이후의 순수 생성 속도는 아직 분리 측정하지 않습니다.
+
+실패 요청은 아래 진단 필드를 가능한 범위에서 저장합니다.
+
+- exception type/message
+- HTTP status
+- response body preview
+- request id 후보 헤더 (`opc-request-id`, `x-request-id` 등)
+
 대시보드는 현재 `runs/` 아래 모든 JSON 리포트를 종합해서 만듭니다.
+HTML 안에서 리전, 모델, concurrency 필터와 case table 정렬을 바로 사용할 수 있습니다.
 
 ```bash
 source .venv/bin/activate
@@ -216,12 +248,12 @@ GitHub에 올리면 별도 스크린샷 없이 최신 대시보드 미리보기�
 ## Current Known Issues
 
 - `google.gemini-2.5-flash`는 일부 리전과 프롬프트 조합에서 `Internal Server Error`가 반복됩니다.
-- 실패 요청은 현재 토큰 사용량이 기록되지 않아 대시보드에서 `0` 또는 `-`로 표시됩니다.
+- 실패 요청은 토큰 사용량이 없을 수 있어 token/throughput 지표에서 제외됩니다.
+- throughput 지표는 end-to-end latency 기준이며, TTFT와 post-TTFT 생성 속도는 아직 분리하지 않습니다.
 - 샌드박스 내부에서는 OCI endpoint 네트워크 제약 때문에 실제 실행이 실패할 수 있습니다. 실벤치마크는 샌드박스 밖 실행이 필요할 수 있습니다.
 
 ## Next Useful Improvements
 
-- 실패 응답의 HTTP status/body를 더 자세히 저장
-- TTFT, tokens/sec 같은 throughput 지표 추가
-- 리전별/모델별 산점도와 failure marker 분리
+- streaming 기반 TTFT와 post-TTFT tokens/sec 추가
+- 리전별/모델별 산점도와 failure marker 추가 개선
 - GitHub Actions로 `docs/` 자동 갱신

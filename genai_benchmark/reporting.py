@@ -5,6 +5,20 @@ from pathlib import Path
 from typing import Any, Dict, Sequence
 
 
+def format_optional(value: Any, suffix: str = "") -> str:
+    if value is None:
+        return "-"
+    return f"{value}{suffix}"
+
+
+def markdown_cell(value: Any, max_chars: int | None = None) -> str:
+    text = "-" if value is None or value == "" else str(value)
+    text = text.replace("\n", " ").replace("|", "\\|")
+    if max_chars is not None:
+        text = text[:max_chars]
+    return text
+
+
 def render_markdown(
     payload: Dict[str, Any],
     args: Any,
@@ -12,6 +26,7 @@ def render_markdown(
     regions: Sequence[str],
 ) -> str:
     selected_models = payload["selected_models"]
+    concurrency_levels = getattr(args, "resolved_concurrency_levels", [getattr(args, "concurrency", 1)])
     lines = [
         "# GenAI Benchmark Report",
         "",
@@ -21,7 +36,7 @@ def render_markdown(
         f"- Profile: `{args.profile}`",
         f"- Prompt file: `{prompt_path}`",
         f"- Repeats: `{args.repeats}`",
-        f"- Concurrency: `{args.concurrency}`",
+        f"- Concurrency Levels: `{', '.join(str(level) for level in concurrency_levels)}`",
         "",
         "## Selected Models",
         "",
@@ -44,22 +59,25 @@ def render_markdown(
             "",
             "## Summary",
             "",
-            "| Region | Family | Model | Case | Success | Avg Latency (s) | P95 Latency (s) | Avg Tokens |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| Region | Family | Model | Case | Concurrency | Success | Avg Latency (s) | P95 Latency (s) | P99 Latency (s) | Avg Tokens | Avg Output Tokens/sec |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     for item in payload["summary"]:
         lines.append(
-            "| {region} | {family} | {model} | {case_id} | {successes}/{attempts} | {avg_latency_seconds} | {p95_latency_seconds} | {avg_total_tokens} |".format(
+            "| {region} | {family} | {model} | {case_id} | {concurrency} | {successes}/{attempts} | {avg_latency_seconds} | {p95_latency_seconds} | {p99_latency_seconds} | {avg_total_tokens} | {avg_output_tokens_per_second} |".format(
                 region=item["region"],
                 family=item["family"],
                 model=item["model"],
                 case_id=item["case_id"],
+                concurrency=item.get("concurrency", 1),
                 successes=item["successes"],
                 attempts=item["attempts"],
-                avg_latency_seconds=item["avg_latency_seconds"] or "-",
-                p95_latency_seconds=item["p95_latency_seconds"] or "-",
-                avg_total_tokens=item["avg_total_tokens"] or "-",
+                avg_latency_seconds=format_optional(item.get("avg_latency_seconds")),
+                p95_latency_seconds=format_optional(item.get("p95_latency_seconds")),
+                p99_latency_seconds=format_optional(item.get("p99_latency_seconds")),
+                avg_total_tokens=format_optional(item.get("avg_total_tokens")),
+                avg_output_tokens_per_second=format_optional(item.get("avg_output_tokens_per_second")),
             )
         )
 
@@ -83,5 +101,32 @@ def render_markdown(
                 )
             )
 
-    return "\n".join(lines) + "\n"
+    failures = [item for item in payload["results"] if item.get("error")]
+    if failures:
+        lines.extend(
+            [
+                "",
+                "## Failure Details",
+                "",
+                "| Region | Family | Model | Case | Concurrency | Iter | Type | HTTP | Request ID | Error | Body Preview |",
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            ]
+        )
+        for item in failures:
+            lines.append(
+                "| {region} | {family} | {model} | {case_id} | {concurrency} | {iteration} | {error_type} | {http_status} | {request_id} | {error} | {body} |".format(
+                    region=item["region"],
+                    family=item["family"],
+                    model=item["model"],
+                    case_id=item["case_id"],
+                    concurrency=item.get("concurrency", 1),
+                    iteration=item["iteration"],
+                    error_type=markdown_cell(item.get("error_type")),
+                    http_status=markdown_cell(item.get("http_status")),
+                    request_id=markdown_cell(item.get("request_id")),
+                    error=markdown_cell(item.get("error"), 240),
+                    body=markdown_cell(item.get("response_body_preview"), 240),
+                )
+            )
 
+    return "\n".join(lines) + "\n"
