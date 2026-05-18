@@ -117,6 +117,7 @@ def aggregate_case_metrics(reports: list[dict]) -> list[dict]:
                     "model": item["model"],
                     "case_id": item["case_id"],
                     "concurrency": item.get("concurrency", 1),
+                    "streaming": item.get("streaming", False),
                     "attempts": attempts,
                     "successes": successes,
                     "failures": item["failures"],
@@ -124,8 +125,10 @@ def aggregate_case_metrics(reports: list[dict]) -> list[dict]:
                     "avg_latency": item["avg_latency_seconds"],
                     "p95_latency": item["p95_latency_seconds"],
                     "p99_latency": item.get("p99_latency_seconds"),
+                    "avg_ttft": item.get("avg_ttft_seconds"),
                     "avg_tokens": item["avg_total_tokens"],
                     "avg_tokens_per_second": item.get("avg_output_tokens_per_second"),
+                    "avg_post_ttft_tokens_per_second": item.get("avg_post_ttft_output_tokens_per_second"),
                 }
             )
     return rows
@@ -144,6 +147,7 @@ def collect_failures(reports: list[dict]) -> list[dict]:
                         "model": item["model"],
                         "case_id": item["case_id"],
                         "concurrency": item.get("concurrency", 1),
+                        "streaming": item.get("streaming", False),
                         "iteration": item["iteration"],
                         "latency": item["latency_seconds"],
                         "error": item["error"],
@@ -466,8 +470,14 @@ def render_case_table(rows: list[dict]) -> str:
         p95 = f"{row['p95_latency']:.3f}s" if row["p95_latency"] is not None else "-"
         p99 = f"{row['p99_latency']:.3f}s" if row["p99_latency"] is not None else "-"
         tokens = f"{row['avg_tokens']:.1f}" if row["avg_tokens"] is not None else "-"
+        ttft = f"{row['avg_ttft']:.3f}s" if row["avg_ttft"] is not None else "-"
         tokens_per_second = (
             f"{row['avg_tokens_per_second']:.3f}" if row["avg_tokens_per_second"] is not None else "-"
+        )
+        post_ttft_tokens_per_second = (
+            f"{row['avg_post_ttft_tokens_per_second']:.3f}"
+            if row["avg_post_ttft_tokens_per_second"] is not None
+            else "-"
         )
         body.append(
             "<tr class='filterable sortable-row' "
@@ -482,18 +492,21 @@ def render_case_table(rows: list[dict]) -> str:
             f"<td><code>{escape(row['model'])}</code></td>"
             f"<td><code>{escape(row['case_id'])}</code></td>"
             f"<td>{row['concurrency']}</td>"
+            f"<td>{'yes' if row['streaming'] else 'no'}</td>"
             f"<td>{row['successes']}/{row['attempts']}</td>"
             f"<td>{row['success_rate']:.1f}%</td>"
             f"<td>{latency}</td>"
             f"<td>{p95}</td>"
             f"<td>{p99}</td>"
+            f"<td>{ttft}</td>"
             f"<td>{tokens}</td>"
             f"<td>{tokens_per_second}</td>"
+            f"<td>{post_ttft_tokens_per_second}</td>"
             "</tr>"
         )
     return (
         "<div class='section'><h2>Case Detail</h2><table><thead><tr>"
-        "<th>Report</th><th>Region</th><th>Family</th><th>Model</th><th>Case</th><th>Concurrency</th><th>Success</th><th>Success Rate</th><th>Avg Latency</th><th>P95</th><th>P99</th><th>Avg Tokens</th><th>Avg E2E Output Tokens/sec</th>"
+        "<th>Report</th><th>Region</th><th>Family</th><th>Model</th><th>Case</th><th>Concurrency</th><th>Streaming</th><th>Success</th><th>Success Rate</th><th>Avg Latency</th><th>P95</th><th>P99</th><th>Avg TTFT</th><th>Avg Tokens</th><th>Avg E2E Output Tokens/sec</th><th>Avg Post-TTFT Output Tokens/sec</th>"
         "</tr></thead><tbody id='case-detail-body'>"
         + "".join(body)
         + "</tbody></table></div>"

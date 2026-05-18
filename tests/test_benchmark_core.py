@@ -3,12 +3,21 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
+import genai_benchmark.runner as runner_module
 from genai_benchmark.cli import parse_concurrency_levels
 from genai_benchmark.catalog import ModelSpec
 from genai_benchmark.dashboard import load_reports, render_html
-from genai_benchmark.runner import RunResult, aggregate_results, extract_failure_details
+from genai_benchmark.runner import (
+    RunResult,
+    aggregate_results,
+    extract_failure_details,
+    invoke_streaming,
+    make_thread_local_llm_factory,
+)
 
 
 def make_result(
@@ -18,6 +27,8 @@ def make_result(
     latency: float,
     output_tokens: int | None,
     error: str | None = None,
+    streaming: bool = False,
+    ttft: float | None = None,
 ) -> RunResult:
     return RunResult(
         region="ap-osaka-1",
@@ -27,12 +38,17 @@ def make_result(
         iteration=iteration,
         concurrency=concurrency,
         latency_seconds=latency,
+        ttft_seconds=ttft,
         input_tokens=10 if error is None else None,
         output_tokens=output_tokens if error is None else None,
         total_tokens=(10 + output_tokens) if output_tokens is not None and error is None else None,
         output_tokens_per_second=round(output_tokens / latency, 3)
         if output_tokens is not None and error is None
         else None,
+        post_ttft_output_tokens_per_second=round(output_tokens / (latency - ttft), 3)
+        if output_tokens is not None and error is None and ttft is not None and latency > ttft
+        else None,
+        streaming=streaming,
         response_preview="ok" if error is None else "",
         error=error,
         error_type="RuntimeError" if error else None,
@@ -85,6 +101,72 @@ class AggregateResultsTest(unittest.TestCase):
         self.assertEqual(by_concurrency[5]["successes"], 1)
         self.assertEqual(by_concurrency[5]["failures"], 1)
         self.assertEqual(by_concurrency[5]["avg_output_tokens_per_second"], 10.0)
+        self.assertEqual(payload["schema_version"], "2.0")
+        self.assertIn("generated_at", payload)
+
+    def test_aggregates_streaming_ttft_metrics(self) -> None:
+        spec = ModelSpec(
+            model_id="openai.gpt-oss-20b",
+            family="openai",
+            label="OpenAI gpt-oss-20b",
+            regions=("ap-osaka-1",),
+        )
+        results = [
+            make_result(concurrency=1, iteration=1, latency=2.0, output_tokens=20, streaming=True, ttft=0.5),
+        ]
+
+        payload = aggregate_results([spec], results, skipped=[], benchmark_config={"streaming": True})
+        summary = payload["summary"][0]
+
+        self.assertTrue(summary["streaming"])
+        self.assertEqual(summary["avg_ttft_seconds"], 0.5)
+        self.assertEqual(summary["avg_post_ttft_output_tokens_per_second"], 13.333)
+        self.assertTrue(payload["benchmark_config"]["streaming"])
+
+
+class StreamingInvocationTest(unittest.TestCase):
+    def test_invoke_streaming_combines_chunks(self) -> None:
+        class Chunk:
+            def __init__(self, content: str) -> None:
+                self.content = content
+
+            def __add__(self, other: "Chunk") -> "Chunk":
+                return Chunk(self.content + other.content)
+
+        class FakeLlm:
+            def stream(self, _messages: list[object]) -> list[Chunk]:
+                return [Chunk("hello"), Chunk(" "), Chunk("world")]
+
+        response, content, ttft = invoke_streaming(FakeLlm(), [])
+
+        self.assertEqual(content, "hello world")
+        self.assertEqual(response.content, "hello world")
+        self.assertIsNotNone(ttft)
+
+
+class ThreadLocalFactoryTest(unittest.TestCase):
+    def test_factory_reuses_per_thread_but_not_across_threads(self) -> None:
+        calls = []
+        original_make_llm = runner_module.make_llm
+
+        def fake_make_llm(_args: object, _region: str, _model: str) -> object:
+            llm = object()
+            calls.append(llm)
+            return llm
+
+        runner_module.make_llm = fake_make_llm
+        try:
+            factory = make_thread_local_llm_factory(SimpleNamespace(), "ap-osaka-1", "model")
+            same_thread_first = factory()
+            same_thread_second = factory()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                other_thread = executor.submit(factory).result()
+        finally:
+            runner_module.make_llm = original_make_llm
+
+        self.assertIs(same_thread_first, same_thread_second)
+        self.assertIsNot(same_thread_first, other_thread)
+        self.assertEqual(len(calls), 2)
 
 
 class FailureDetailsTest(unittest.TestCase):
@@ -144,6 +226,7 @@ class DashboardCompatibilityTest(unittest.TestCase):
         self.assertIn("region-filter", html)
         self.assertIn("case-sort", html)
         self.assertIn("Avg E2E Output Tokens/sec", html)
+        self.assertIn("Avg TTFT", html)
 
     def test_dashboard_renders_failure_summary(self) -> None:
         payload = {

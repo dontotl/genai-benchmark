@@ -1,0 +1,82 @@
+{
+  "schema_version": "2.0",
+  "generated_at": "2026-05-18T00:00:00+00:00",
+  "benchmark_config": {
+    "prompt_file": "prompts/sample_prompts.jsonl",
+    "regions": [
+      "ap-osaka-1"
+    ],
+    "profile": "DEFAULT",
+    "source_label": "ci",
+    "repeats": 1,
+    "concurrency_levels": [
+      1
+    ],
+    "temperature": 0.0,
+    "max_tokens": 512,
+    "streaming": true,
+    "families": [
+      "openai"
+    ],
+    "models": [],
+    "include_experimental": false
+  },
+  "selected_models": [
+    {
+      "model_id": "openai.gpt-oss-20b",
+      "family": "openai",
+      "label": "OpenAI gpt-oss-20b",
+      "regions": [
+        "ap-osaka-1"
+      ],
+      "default_selected": true,
+      "experimental": false,
+      "mode": "on-demand"
+    }
+  ],
+  "summary": [
+    {
+      "region": "ap-osaka-1",
+      "model": "openai.gpt-oss-20b",
+      "family": "openai",
+      "case_id": "ci-smoke",
+      "concurrency": 1,
+      "streaming": true,
+      "attempts": 1,
+      "successes": 1,
+      "failures": 0,
+      "avg_latency_seconds": 1.0,
+      "p95_latency_seconds": 1.0,
+      "p99_latency_seconds": 1.0,
+      "avg_ttft_seconds": 0.2,
+      "avg_total_tokens": 30.0,
+      "avg_output_tokens_per_second": 20.0,
+      "avg_post_ttft_output_tokens_per_second": 25.0
+    }
+  ],
+  "results": [
+    {
+      "region": "ap-osaka-1",
+      "model": "openai.gpt-oss-20b",
+      "family": "openai",
+      "case_id": "ci-smoke",
+      "iteration": 1,
+      "concurrency": 1,
+      "latency_seconds": 1.0,
+      "ttft_seconds": 0.2,
+      "input_tokens": 10,
+      "output_tokens": 20,
+      "total_tokens": 30,
+      "output_tokens_per_second": 20.0,
+      "post_ttft_output_tokens_per_second": 25.0,
+      "streaming": true,
+      "response_preview": "ok",
+      "error": null,
+      "error_type": null,
+      "http_status": null,
+      "response_body_preview": null,
+      "request_id": null
+    }
+  ],
+  "skipped": []
+}

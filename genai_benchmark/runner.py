@@ -3,15 +3,18 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import statistics
+import threading
 import time
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Sequence
 
 from .catalog import ModelSpec
 
 
 DEFAULT_SYSTEM_PROMPT = "You are a precise assistant. Answer directly."
+SCHEMA_VERSION = "2.0"
 
 
 @dataclass
@@ -29,10 +32,13 @@ class RunResult:
     iteration: int
     concurrency: int
     latency_seconds: float
+    ttft_seconds: float | None
     input_tokens: int | None
     output_tokens: int | None
     total_tokens: int | None
     output_tokens_per_second: float | None
+    post_ttft_output_tokens_per_second: float | None
+    streaming: bool
     response_preview: str
     error: str | None
     error_type: str | None
@@ -140,6 +146,19 @@ def make_llm(args: Any, region: str, model: str) -> Any:
     )
 
 
+def make_thread_local_llm_factory(args: Any, region: str, model: str) -> Callable[[], Any]:
+    local_state = threading.local()
+
+    def get_llm() -> Any:
+        llm = getattr(local_state, "llm", None)
+        if llm is None:
+            llm = make_llm(args, region, model)
+            local_state.llm = llm
+        return llm
+
+    return get_llm
+
+
 def extract_usage(response: Any) -> tuple[int | None, int | None, int | None]:
     if getattr(response, "usage_metadata", None):
         usage = response.usage_metadata
@@ -151,6 +170,59 @@ def extract_usage(response: Any) -> tuple[int | None, int | None, int | None]:
     output_tokens = token_usage.get("completion_tokens") or token_usage.get("output_tokens")
     total_tokens = token_usage.get("total_tokens")
     return input_tokens, output_tokens, total_tokens
+
+
+def content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if text:
+                    parts.append(str(text))
+            elif item is not None:
+                parts.append(str(item))
+        return "".join(parts)
+    return "" if content is None else str(content)
+
+
+def calculate_post_ttft_tokens_per_second(
+    output_tokens: int | None,
+    latency_seconds: float,
+    ttft_seconds: float | None,
+) -> float | None:
+    if output_tokens is None or ttft_seconds is None:
+        return None
+    generation_seconds = latency_seconds - ttft_seconds
+    if generation_seconds <= 0:
+        return None
+    return round(output_tokens / generation_seconds, 3)
+
+
+def invoke_streaming(llm: Any, prompt_messages: Sequence[Any]) -> tuple[Any, str, float | None]:
+    response = None
+    content_parts: list[str] = []
+    ttft_seconds: float | None = None
+    start = time.perf_counter()
+    for chunk in llm.stream(prompt_messages):
+        chunk_text = content_to_text(getattr(chunk, "content", ""))
+        if chunk_text and ttft_seconds is None:
+            ttft_seconds = time.perf_counter() - start
+        content_parts.append(chunk_text)
+        if response is None:
+            response = chunk
+        else:
+            try:
+                response += chunk
+            except Exception:
+                response = chunk
+    if response is None:
+        raise RuntimeError("Streaming response produced no chunks.")
+    return response, "".join(content_parts), ttft_seconds
 
 
 def extract_request_id(headers: Any) -> str | None:
@@ -245,18 +317,29 @@ def run_single_invocation(
     case: BenchmarkCase,
     iteration: int,
     concurrency: int,
-    llm: Any,
+    llm_factory: Callable[[], Any],
     prompt_messages: Sequence[Any],
+    streaming: bool,
 ) -> RunResult:
-    start = time.perf_counter()
     try:
-        response = llm.invoke(prompt_messages)
+        llm = llm_factory()
+        start = time.perf_counter()
+        if streaming:
+            response, content, ttft_seconds = invoke_streaming(llm, prompt_messages)
+        else:
+            response = llm.invoke(prompt_messages)
+            ttft_seconds = None
+            content = content_to_text(getattr(response, "content", ""))
         latency = time.perf_counter() - start
         input_tokens, output_tokens, total_tokens = extract_usage(response)
         output_tokens_per_second = (
             round(output_tokens / latency, 3) if output_tokens is not None and latency > 0 else None
         )
-        content = response.content if isinstance(response.content, str) else str(response.content)
+        post_ttft_output_tokens_per_second = calculate_post_ttft_tokens_per_second(
+            output_tokens,
+            latency,
+            ttft_seconds,
+        )
         return RunResult(
             region=region,
             model=spec.model_id,
@@ -265,10 +348,13 @@ def run_single_invocation(
             iteration=iteration,
             concurrency=concurrency,
             latency_seconds=latency,
+            ttft_seconds=round(ttft_seconds, 3) if ttft_seconds is not None else None,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
             output_tokens_per_second=output_tokens_per_second,
+            post_ttft_output_tokens_per_second=post_ttft_output_tokens_per_second,
+            streaming=streaming,
             response_preview=content[:200],
             error=None,
             error_type=None,
@@ -277,7 +363,7 @@ def run_single_invocation(
             request_id=None,
         )
     except Exception as exc:  # pragma: no cover - network/runtime error path
-        latency = time.perf_counter() - start
+        latency = time.perf_counter() - start if "start" in locals() else 0.0
         failure = extract_failure_details(exc)
         return RunResult(
             region=region,
@@ -287,10 +373,13 @@ def run_single_invocation(
             iteration=iteration,
             concurrency=concurrency,
             latency_seconds=latency,
+            ttft_seconds=None,
             input_tokens=None,
             output_tokens=None,
             total_tokens=None,
             output_tokens_per_second=None,
+            post_ttft_output_tokens_per_second=None,
+            streaming=streaming,
             response_preview="",
             error=failure["error"],
             error_type=failure["error_type"],
@@ -307,17 +396,27 @@ def run_benchmark(
 ) -> List[RunResult]:
     results: List[RunResult] = []
     concurrency_levels = getattr(args, "resolved_concurrency_levels", [args.concurrency])
+    streaming = bool(getattr(args, "streaming", False))
 
     for spec, region in execution_targets:
         for case in cases:
-            llm = make_llm(args, region, spec.model_id)
+            llm_factory = make_thread_local_llm_factory(args, region, spec.model_id)
             prompt_messages = to_langchain_messages(case.messages)
             for concurrency in concurrency_levels:
                 iterations = range(1, args.repeats + 1)
                 if concurrency <= 1:
                     for iteration in iterations:
                         results.append(
-                            run_single_invocation(region, spec, case, iteration, concurrency, llm, prompt_messages)
+                            run_single_invocation(
+                                region,
+                                spec,
+                                case,
+                                iteration,
+                                concurrency,
+                                llm_factory,
+                                prompt_messages,
+                                streaming,
+                            )
                         )
                     continue
 
@@ -330,8 +429,9 @@ def run_benchmark(
                             case,
                             iteration,
                             concurrency,
-                            llm,
+                            llm_factory,
                             prompt_messages,
+                            streaming,
                         ): iteration
                         for iteration in iterations
                     }
@@ -355,6 +455,7 @@ def aggregate_results(
     selected_models: Sequence[ModelSpec],
     results: Sequence[RunResult],
     skipped: Sequence[SkippedCombination],
+    benchmark_config: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     grouped: Dict[tuple[str, str, str, int], List[RunResult]] = {}
     for result in results:
@@ -365,10 +466,17 @@ def aggregate_results(
         successful = [item for item in items if item.error is None]
         latencies = [item.latency_seconds for item in successful]
         total_tokens = [item.total_tokens for item in successful if item.total_tokens is not None]
+        ttfts = [item.ttft_seconds for item in successful if item.ttft_seconds is not None]
         tokens_per_second = [
             item.output_tokens_per_second for item in successful if item.output_tokens_per_second is not None
         ]
+        post_ttft_tokens_per_second = [
+            item.post_ttft_output_tokens_per_second
+            for item in successful
+            if item.post_ttft_output_tokens_per_second is not None
+        ]
         family = items[0].family if items else ""
+        streaming = items[0].streaming if items else False
         summaries.append(
             {
                 "region": region,
@@ -376,20 +484,28 @@ def aggregate_results(
                 "family": family,
                 "case_id": case_id,
                 "concurrency": concurrency,
+                "streaming": streaming,
                 "attempts": len(items),
                 "successes": len(successful),
                 "failures": len(items) - len(successful),
                 "avg_latency_seconds": round(statistics.fmean(latencies), 3) if latencies else None,
                 "p95_latency_seconds": round(percentile(latencies, 95), 3) if latencies else None,
                 "p99_latency_seconds": round(percentile(latencies, 99), 3) if latencies else None,
+                "avg_ttft_seconds": round(statistics.fmean(ttfts), 3) if ttfts else None,
                 "avg_total_tokens": round(statistics.fmean(total_tokens), 1) if total_tokens else None,
                 "avg_output_tokens_per_second": round(statistics.fmean(tokens_per_second), 3)
                 if tokens_per_second
+                else None,
+                "avg_post_ttft_output_tokens_per_second": round(statistics.fmean(post_ttft_tokens_per_second), 3)
+                if post_ttft_tokens_per_second
                 else None,
             }
         )
 
     return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "benchmark_config": benchmark_config or {},
         "selected_models": [asdict(model) for model in selected_models],
         "summary": summaries,
         "results": [asdict(result) for result in results],

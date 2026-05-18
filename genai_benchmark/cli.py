@@ -75,6 +75,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument(
+        "--streaming",
+        action="store_true",
+        help="Use streaming responses to measure TTFT and post-TTFT output tokens/sec.",
+    )
+    parser.add_argument(
         "--source-label",
         default=os.getenv("OCI_APP_REGION_LABEL", ""),
         help="Optional label describing where the benchmark client is running from.",
@@ -147,6 +152,23 @@ def parse_concurrency_levels(raw_value: str, fallback: int) -> list[int]:
     return levels
 
 
+def build_benchmark_config(args: argparse.Namespace, prompt_path: Path, regions: list[str]) -> dict[str, Any]:
+    return {
+        "prompt_file": str(prompt_path),
+        "regions": regions,
+        "profile": args.profile,
+        "source_label": args.source_label or "",
+        "repeats": args.repeats,
+        "concurrency_levels": getattr(args, "resolved_concurrency_levels", [args.concurrency]),
+        "temperature": args.temperature,
+        "max_tokens": args.max_tokens,
+        "streaming": args.streaming,
+        "families": args.families or list(DEFAULT_FAMILIES),
+        "models": args.models or [],
+        "include_experimental": args.include_experimental,
+    }
+
+
 def print_dry_run(
     cases: list[Any],
     selected_models: list[Any],
@@ -165,6 +187,7 @@ def print_dry_run(
     for model in selected_models:
         print(f"- {model.model_id} [{model.family}]")
     print(f"Concurrency levels: {', '.join(str(level) for level in concurrency_levels)}")
+    print(f"Streaming: {'yes' if args.streaming else 'no'}")
     print(f"Runnable region/model targets: {len(execution_targets)}")
     print(f"Planned requests: {len(cases) * len(execution_targets) * args.repeats * len(concurrency_levels)}")
     for case in cases:
@@ -210,7 +233,12 @@ def main() -> int:
         raise SystemExit("No runnable region/model targets remain after catalog filtering.")
 
     results = run_benchmark(args, cases, execution_targets)
-    payload = aggregate_results(selected_models, results, skipped)
+    payload = aggregate_results(
+        selected_models,
+        results,
+        skipped,
+        build_benchmark_config(args, prompt_path, regions),
+    )
 
     output_dir = Path(args.output_dir)
     if not output_dir.is_absolute():
