@@ -56,6 +56,12 @@ def parse_args() -> argparse.Namespace:
         help="Target region. Repeat this flag to benchmark multiple regions.",
     )
     parser.add_argument("--profile", default=os.getenv("OCI_PROFILE", DEFAULT_PROFILE))
+    parser.add_argument(
+        "--auth-method",
+        choices=("user_principal", "instance_principal"),
+        default=os.getenv("OCI_AUTH_METHOD", "user_principal"),
+        help="OCI request signing method. Defaults to user_principal for existing ~/.oci/config based runs.",
+    )
     parser.add_argument("--compartment-id", default=os.getenv("OCI_COMPARTMENT_ID", ""))
     parser.add_argument("--repeats", type=int, default=3, help="Number of runs per prompt and model.")
     parser.add_argument(
@@ -157,6 +163,7 @@ def build_benchmark_config(args: argparse.Namespace, prompt_path: Path, regions:
         "prompt_file": str(prompt_path),
         "regions": regions,
         "profile": args.profile,
+        "auth_method": args.auth_method,
         "source_label": args.source_label or "",
         "repeats": args.repeats,
         "concurrency_levels": getattr(args, "resolved_concurrency_levels", [args.concurrency]),

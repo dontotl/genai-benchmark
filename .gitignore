@@ -1,6 +1,8 @@
 .env
 .venv/
 __pycache__/
+configs/*.local.json
+runs/*state*.json
 runs/*.json
 runs/*.md
 runs/*.html

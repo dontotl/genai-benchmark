@@ -35,6 +35,7 @@ def render_markdown(
         f"- Source Label: `{args.source_label or 'unspecified'}`",
         f"- Regions Requested: {', '.join(f'`{region}`' for region in regions)}",
         f"- Profile: `{args.profile}`",
+        f"- Auth Method: `{getattr(args, 'auth_method', 'user_principal')}`",
         f"- Prompt file: `{prompt_path}`",
         f"- Repeats: `{args.repeats}`",
         f"- Concurrency Levels: `{', '.join(str(level) for level in concurrency_levels)}`",

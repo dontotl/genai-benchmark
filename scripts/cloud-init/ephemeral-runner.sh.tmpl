@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+
+dnf install -y git python3.11 python3.11-pip python3.11-devel
+
+cat >/tmp/genai-benchmark-runner.sh <<'RUNNER_SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH="${HOME}/.local/bin:${PATH}"
+
+if ! command -v oci >/dev/null 2>&1; then
+  python3.11 -m pip install --user oci-cli
+fi
+
+for attempt in $(seq 1 30); do
+  if oci os ns get __OCI_AUTH_ARGS__ --region "${OBJECT_STORAGE_REGION}" >/dev/null 2>&1; then
+    break
+  fi
+  if [ "${attempt}" = "30" ]; then
+    echo "OCI authentication did not become ready." >&2
+    exit 1
+  fi
+  sleep 10
+done
+
+rm -rf "${WORK_DIR}"
+git clone --branch "${REPO_REF}" "${REPO_URL}" "${WORK_DIR}"
+cd "${WORK_DIR}"
+
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt
+
+python benchmark.py __BENCHMARK_ARGS__
+
+oci os object put \
+  --region "${OBJECT_STORAGE_REGION}" \
+  __OCI_AUTH_ARGS__ \
+  --bucket-name "${BUCKET_NAME}" \
+  --name "runs/${SOURCE_LABEL}/${REPORT_NAME}.json" \
+  --file "runs/${REPORT_NAME}.json" \
+  --force
+
+oci os object put \
+  --region "${OBJECT_STORAGE_REGION}" \
+  __OCI_AUTH_ARGS__ \
+  --bucket-name "${BUCKET_NAME}" \
+  --name "runs/${SOURCE_LABEL}/${REPORT_NAME}.md" \
+  --file "runs/${REPORT_NAME}.md" \
+  --force
+
+printf "completed\n" > /tmp/benchmark-complete.txt
+oci os object put \
+  --region "${OBJECT_STORAGE_REGION}" \
+  __OCI_AUTH_ARGS__ \
+  --bucket-name "${BUCKET_NAME}" \
+  --name "runs/${SOURCE_LABEL}/_complete.txt" \
+  --file /tmp/benchmark-complete.txt \
+  --force
+RUNNER_SCRIPT
+
+chmod +x /tmp/genai-benchmark-runner.sh
+chown "__RUNNER_USER__:__RUNNER_USER__" /tmp/genai-benchmark-runner.sh
+
+sudo -iu "__RUNNER_USER__" env \
+  SOURCE_LABEL=__SOURCE_LABEL__ \
+  REPORT_NAME=__REPORT_NAME__ \
+  BUCKET_NAME=__BUCKET_NAME__ \
+  OBJECT_STORAGE_REGION=__OBJECT_STORAGE_REGION__ \
+  REPO_URL=__REPO_URL__ \
+  REPO_REF=__REPO_REF__ \
+  WORK_DIR=__WORK_DIR__ \
+  /tmp/genai-benchmark-runner.sh

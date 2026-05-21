@@ -1,0 +1,56 @@
+{
+  "compartment_id": "ocid1.compartment.oc1..example",
+  "benchmark_compartment_id": "ocid1.compartment.oc1..example",
+  "bucket_name": "genai-benchmark-results",
+  "object_storage_region": "ap-osaka-1",
+  "repo_url": "https://github.com/<owner>/genai-benchmark.git",
+  "repo_ref": "main",
+  "control_profile": "DEFAULT",
+  "runner_profile": "DEFAULT",
+  "runner_auth_method": "user_principal",
+  "runner_user": "opc",
+  "work_dir": "/home/opc/genai-benchmark",
+  "shape": "VM.Standard.E4.Flex",
+  "shape_config": {
+    "ocpus": 1,
+    "memoryInGBs": 8
+  },
+  "network": {
+    "mode": "existing_subnet"
+  },
+  "target_regions": [
+    "ap-osaka-1",
+    "us-chicago-1",
+    "eu-frankfurt-1"
+  ],
+  "benchmark": {
+    "repeats": 3,
+    "concurrency_levels": "1,5,10",
+    "prompts": "prompts/sample_prompts.jsonl",
+    "report_suffix": "global-r3",
+    "extra_args": []
+  },
+  "runners": [
+    {
+      "region": "ap-osaka-1",
+      "source_label": "ap-osaka-runner",
+      "availability_domain": "<availability-domain>",
+      "subnet_id": "ocid1.subnet.oc1.ap-osaka-1.example",
+      "image_id": "ocid1.image.oc1.ap-osaka-1.example"
+    },
+    {
+      "region": "us-chicago-1",
+      "source_label": "us-chicago-runner",
+      "availability_domain": "<availability-domain>",
+      "subnet_id": "ocid1.subnet.oc1.us-chicago-1.example",
+      "image_id": "ocid1.image.oc1.us-chicago-1.example"
+    },
+    {
+      "region": "eu-frankfurt-1",
+      "source_label": "eu-frankfurt-runner",
+      "availability_domain": "<availability-domain>",
+      "subnet_id": "ocid1.subnet.oc1.eu-frankfurt-1.example",
+      "image_id": "ocid1.image.oc1.eu-frankfurt-1.example"
+    }
+  ]
+}

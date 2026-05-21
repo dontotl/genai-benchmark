@@ -267,6 +267,36 @@ GitHub용 정적 사이트 산출물은 아래 명령으로 생성합니다.
 README의 미리보기 이미지는 `docs/dashboard-preview.svg`를 직접 가리키므로,
 GitHub에 올리면 별도 스크린샷 없이 최신 대시보드 미리보기가 보입니다.
 
+여러 OCI 리전에 임시 runner VM을 만들고 각 거점에서 GenAI endpoint latency를
+측정하는 자동화 설계안은 [docs/ephemeral-runner-vm-automation.md](docs/ephemeral-runner-vm-automation.md)에
+정리돼 있습니다.
+
+자동화 명령은 먼저 dry-run 성격의 plan으로 확인할 수 있습니다.
+
+```bash
+source .venv/bin/activate
+python scripts/ephemeral_runner.py \
+  --config configs/ephemeral-runners.example.json \
+  --action plan
+```
+
+새 VCN/public subnet/VM까지 만드는 Seoul smoke 예시는 아래 config에서 시작합니다.
+
+```bash
+cp configs/ephemeral-seoul-managed.example.json configs/ephemeral-seoul-managed.local.json
+```
+
+실제 OCID와 SSH public key를 채운 뒤, 먼저 dry-run으로 명령 순서를 확인합니다.
+
+```bash
+python scripts/ephemeral_runner.py \
+  --config configs/ephemeral-seoul-managed.local.json \
+  --action run-managed \
+  --runner ap-seoul-runner \
+  --dry-run \
+  --keep-on-failure
+```
+
 ## GitHub Deployment Notes
 
 이 프로젝트는 `docs/` 기반 GitHub Pages 배포를 전제로 정리돼 있습니다.

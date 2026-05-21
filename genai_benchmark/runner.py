@@ -117,20 +117,25 @@ def import_runtime_dependencies() -> tuple[Any, Any, Any]:
     try:
         import httpx
         from langchain_openai import ChatOpenAI
-        from oci_openai import OciUserPrincipalAuth
+        from oci_openai import OciInstancePrincipalAuth, OciUserPrincipalAuth
     except ImportError as exc:
         missing_name = getattr(exc, "name", "runtime dependency")
         raise SystemExit(
             f"Missing dependency: {missing_name}. "
             "Create a Python 3.11 virtualenv and run `pip install -r requirements.txt`."
         ) from exc
-    return httpx, ChatOpenAI, OciUserPrincipalAuth
+    return httpx, ChatOpenAI, OciInstancePrincipalAuth, OciUserPrincipalAuth
 
 
 def make_llm(args: Any, region: str, model: str) -> Any:
-    httpx, ChatOpenAI, OciUserPrincipalAuth = import_runtime_dependencies()
+    httpx, ChatOpenAI, OciInstancePrincipalAuth, OciUserPrincipalAuth = import_runtime_dependencies()
     if not args.compartment_id:
         raise ValueError("OCI_COMPARTMENT_ID or --compartment-id is required.")
+    auth_method = getattr(args, "auth_method", "user_principal")
+    if auth_method == "instance_principal":
+        auth = OciInstancePrincipalAuth()
+    else:
+        auth = OciUserPrincipalAuth(profile_name=args.profile)
 
     return ChatOpenAI(
         model=model,
@@ -139,7 +144,7 @@ def make_llm(args: Any, region: str, model: str) -> Any:
         temperature=args.temperature,
         max_tokens=args.max_tokens,
         http_client=httpx.Client(
-            auth=OciUserPrincipalAuth(profile_name=args.profile),
+            auth=auth,
             headers={"CompartmentId": args.compartment_id},
             timeout=120.0,
         ),
