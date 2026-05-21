@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import tempfile
@@ -10,18 +12,24 @@ from genai_benchmark.ephemeral_runner import (
     ConfigError,
     benchmark_args,
     combine_dynamic_group_matching_rule,
+    completion_marker_name,
     dynamic_group_restore_command,
     dynamic_group_update_command,
     launch_command,
     load_config,
     object_get_command,
+    object_head_command,
     policy_create_command,
+    run_managed_suite,
     security_list_create_command,
+    suite_state_path,
     subnet_create_command,
     vcn_create_command,
     render_cloud_init,
     report_name,
     selected_runners,
+    validate_managed_suite_config,
+    write_suite_summary,
 )
 
 
@@ -137,6 +145,17 @@ class EphemeralRunnerCommandTest(unittest.TestCase):
         self.assertIn("--auth-method instance_principal", rendered)
         self.assertIn("oci os ns get --auth instance_principal", rendered)
         self.assertIn("--auth instance_principal", rendered)
+        self.assertIn("COMPLETION_MARKER=runs/ap-osaka-runner/_ap-osaka-runner-global-r3.complete.txt", rendered)
+
+    def test_completion_marker_is_report_specific(self) -> None:
+        config = load_config(write_config(sample_config()))
+        runner = config.runners[0]
+
+        marker = completion_marker_name(config, runner)
+        head = object_head_command(config, runner)
+
+        self.assertEqual(marker, "runs/ap-osaka-runner/_ap-osaka-runner-global-r3.complete.txt")
+        self.assertIn(marker, head)
 
     def test_builds_managed_network_and_policy_commands(self) -> None:
         payload = sample_config()
@@ -233,6 +252,98 @@ class EphemeralRunnerCommandTest(unittest.TestCase):
         policy = " ".join(policy_create_command(config, runner))
 
         self.assertIn("Allow dynamic-group ociexplain-dyn-group", policy)
+
+    def test_rejects_parallel_suite_with_existing_dynamic_group_updates(self) -> None:
+        payload = sample_config()
+        payload["network"] = {
+            "existing_dynamic_group_id": "ocid1.dynamicgroup.oc1..existing",
+            "existing_dynamic_group_base_matching_rule": "instance.compartment.id = 'ocid1.compartment.oc1..base'",
+        }
+        payload["runners"].append(
+            {
+                "region": "us-chicago-1",
+                "source_label": "us-chicago-runner",
+                "availability_domain": "AD-1",
+                "subnet_id": "subnet-chicago",
+                "image_id": "image-chicago",
+            }
+        )
+        config = load_config(write_config(payload))
+
+        with self.assertRaises(ConfigError):
+            validate_managed_suite_config(config, config.runners, parallelism=2)
+
+    def test_suite_state_path_uses_runner_label(self) -> None:
+        config = load_config(write_config(sample_config()))
+        runner = config.runners[0]
+
+        self.assertEqual(
+            suite_state_path(Path("runs/ephemeral-runner-state.json"), runner),
+            Path("runs/ap-osaka-runner-state.json"),
+        )
+
+    def test_run_managed_suite_dry_run_allows_compartment_rule_mode(self) -> None:
+        payload = sample_config()
+        payload["network"] = {
+            "existing_dynamic_group_id": "ocid1.dynamicgroup.oc1..existing",
+            "existing_dynamic_group_update": False,
+            "existing_policy_id": "ocid1.policy.oc1..existing",
+        }
+        config = load_config(write_config(payload))
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            run_managed_suite(
+                config,
+                config.runners,
+                Path("runs"),
+                Path("runs/ephemeral-runner-state.json"),
+                poll_interval=30,
+                timeout_seconds=3600,
+                keep_on_failure=False,
+                dry_run=True,
+                parallelism=3,
+                name="global-r3",
+                docs_dir=Path("docs"),
+                publish_site=True,
+            )
+
+    def test_writes_suite_summary_from_collected_reports(self) -> None:
+        payload = sample_config()
+        config = load_config(write_config(payload))
+        runner = config.runners[0]
+        with tempfile.TemporaryDirectory() as raw_dir:
+            output_dir = Path(raw_dir)
+            report_path = output_dir / f"{report_name(config, runner)}.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "benchmark_config": {
+                            "source_label": runner.source_label,
+                            "regions": ["ap-osaka-1", "us-chicago-1"],
+                        },
+                        "results": [
+                            {"region": "ap-osaka-1", "latency_seconds": 1.0, "error": None},
+                            {"region": "us-chicago-1", "latency_seconds": 3.0, "error": None},
+                            {"region": "us-chicago-1", "latency_seconds": 2.0, "error": "failed"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = write_suite_summary(
+                config,
+                [runner],
+                output_dir,
+                "global-r3",
+                {runner.source_label: "succeeded"},
+            )
+
+            rendered = summary.read_text(encoding="utf-8")
+
+        self.assertIn("# global-r3 Suite Summary", rendered)
+        self.assertIn("| `ap-osaka-runner` | `succeeded` | 3 | 2 | 1 | 2.000s |", rendered)
+        self.assertIn("| `ap-osaka-runner` | `us-chicago-1` | 3.000s |", rendered)
 
 
 if __name__ == "__main__":

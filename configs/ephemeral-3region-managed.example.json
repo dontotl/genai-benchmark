@@ -1,0 +1,66 @@
+{
+  "compartment_id": "ocid1.compartment.oc1..example",
+  "benchmark_compartment_id": "ocid1.compartment.oc1..example",
+  "bucket_name": "genai-benchmark-results",
+  "object_storage_region": "ap-seoul-1",
+  "repo_url": "https://github.com/<owner>/genai-benchmark.git",
+  "repo_ref": "main",
+  "control_profile": "DEFAULT",
+  "runner_profile": "DEFAULT",
+  "runner_auth_method": "instance_principal",
+  "runner_user": "opc",
+  "work_dir": "/home/opc/genai-benchmark",
+  "shape": "VM.Standard.E4.Flex",
+  "shape_config": {
+    "ocpus": 1,
+    "memoryInGBs": 8
+  },
+  "network": {
+    "mode": "managed_public",
+    "name_prefix": "genai-benchmark",
+    "vcn_cidr": "10.91.0.0/16",
+    "subnet_cidr": "10.91.1.0/24",
+    "enable_ssh": false,
+    "iam_compartment_id": "ocid1.tenancy.oc1..example",
+    "iam_region": "us-ashburn-1",
+    "existing_dynamic_group_id": "ocid1.dynamicgroup.oc1..example",
+    "existing_dynamic_group_name": "ociexplain-dyn-group",
+    "existing_dynamic_group_update": false,
+    "existing_policy_id": "ocid1.policy.oc1..example",
+    "dns_label": "genaibench",
+    "subnet_dns_label": "runner"
+  },
+  "target_regions": [
+    "ap-osaka-1",
+    "us-chicago-1",
+    "eu-frankfurt-1"
+  ],
+  "benchmark": {
+    "suite_name": "global-smoke-r1",
+    "repeats": 1,
+    "concurrency_levels": "1",
+    "prompts": "prompts/sample_prompts.jsonl",
+    "report_suffix": "global-smoke-r1",
+    "extra_args": []
+  },
+  "runners": [
+    {
+      "region": "ap-osaka-1",
+      "source_label": "ap-osaka-runner",
+      "availability_domain": "<availability-domain>",
+      "image_id": "ocid1.image.oc1.ap-osaka-1.oracle-linux-8-example"
+    },
+    {
+      "region": "us-chicago-1",
+      "source_label": "us-chicago-runner",
+      "availability_domain": "<availability-domain>",
+      "image_id": "ocid1.image.oc1.us-chicago-1.oracle-linux-8-example"
+    },
+    {
+      "region": "eu-frankfurt-1",
+      "source_label": "eu-frankfurt-runner",
+      "availability_domain": "<availability-domain>",
+      "image_id": "ocid1.image.oc1.eu-frankfurt-1.oracle-linux-8-example"
+    }
+  ]
+}

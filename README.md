@@ -297,6 +297,21 @@ python scripts/ephemeral_runner.py \
   --keep-on-failure
 ```
 
+3개 source region을 병렬로 실행하고 결과 요약과 docs 대시보드까지 생성하려면
+managed suite config를 사용합니다. 기존 Dynamic Group을 재사용하는 경우에는
+runner 컴파트먼트를 매칭하는 rule을 미리 포함하고
+`existing_dynamic_group_update=false`로 둬야 병렬 실행이 안전합니다.
+
+```bash
+cp configs/ephemeral-3region-managed.example.json configs/ephemeral-3region-managed.local.json
+
+python scripts/ephemeral_runner.py \
+  --config configs/ephemeral-3region-managed.local.json \
+  --action run-managed-suite \
+  --parallelism 3 \
+  --suite-name global-smoke-r1
+```
+
 ## GitHub Deployment Notes
 
 이 프로젝트는 `docs/` 기반 GitHub Pages 배포를 전제로 정리돼 있습니다.

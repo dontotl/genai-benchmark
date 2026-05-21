@@ -130,6 +130,9 @@ Operational notes from the first Seoul smoke:
   `network.existing_dynamic_group_update` to `false`. Otherwise provide
   `network.existing_dynamic_group_base_matching_rule`; cleanup restores that
   base rule after the VM run.
+- Parallel managed suites require `network.existing_dynamic_group_update=false`
+  when reusing an existing Dynamic Group. The group should already include a
+  rule that matches the runner compartment.
 - If creating a temporary policy for an existing Dynamic Group, set
   `network.existing_dynamic_group_name` so the policy statement names the real
   group.
@@ -144,7 +147,7 @@ Operational notes from the first Seoul smoke:
 3. cloud-init installs dependencies and prepares the benchmark repo.
 4. The VM runs benchmark commands with a region-specific `--source-label`.
 5. The VM uploads JSON and Markdown reports to Object Storage.
-6. The VM uploads a small completion marker.
+6. The VM uploads a report-specific completion marker.
 7. The control node confirms reports exist in Object Storage.
 8. The control node terminates the runner VM.
 9. Reports are downloaded into `runs/`.
@@ -157,11 +160,13 @@ The initial automation implementation is in the repo:
 - `genai_benchmark/ephemeral_runner.py`: Python control CLI implementation.
 - `scripts/ephemeral_runner.py`: executable wrapper for the control CLI.
 - `scripts/cloud-init/ephemeral-runner.sh.tmpl`: Oracle Linux cloud-init template.
-- `configs/ephemeral-runners.example.json`: example runner config.
+- `configs/ephemeral-runners.example.json`: existing-subnet runner example.
+- `configs/ephemeral-3region-managed.example.json`: managed public 3-region
+  suite example.
 
 The control CLI uses OCI CLI through `subprocess`. It supports `plan`,
 `launch`, `collect`, `terminate`, `run`, `provision-network`, `run-managed`,
-and `cleanup-managed` actions.
+`run-managed-suite`, and `cleanup-managed` actions.
 
 ## Cloud-Init Bootstrap Outline
 
@@ -214,7 +219,7 @@ oci os object put \
   --region "${OBJECT_STORAGE_REGION}" \
   --profile "${OCI_PROFILE}" \
   --bucket-name "${BUCKET_NAME}" \
-  --name "runs/${SOURCE_LABEL}/_complete.txt" \
+  --name "runs/${SOURCE_LABEL}/_${SOURCE_LABEL}-global-r3.complete.txt" \
   --file /tmp/benchmark-complete.txt \
   --force
 ```
@@ -301,6 +306,25 @@ python scripts/ephemeral_runner.py \
   --action cleanup-managed \
   --resource-state runs/ap-seoul-runner-state.json
 ```
+
+Run a managed 3-region suite in parallel and publish reports:
+
+```bash
+cp configs/ephemeral-3region-managed.example.json configs/ephemeral-3region-managed.local.json
+
+python scripts/ephemeral_runner.py \
+  --config configs/ephemeral-3region-managed.local.json \
+  --action run-managed-suite \
+  --parallelism 3 \
+  --resource-state runs/ephemeral-runner-state.json \
+  --suite-name global-smoke-r1
+```
+
+The suite action writes runner state files as `runs/<source-label>-state.json`,
+downloads each runner JSON/Markdown report, writes
+`runs/<suite-name>-summary.md`, and regenerates `docs/dashboard.html`,
+`docs/index.html`, and `docs/dashboard-preview.svg`. Use `--no-publish-site`
+to skip docs generation.
 
 The managed Seoul smoke example uses:
 

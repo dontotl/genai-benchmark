@@ -23,6 +23,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def choose_focus_report(reports: list[dict]) -> dict:
+    reports_with_timestamps = [report for report in reports if report.get("generated_at")]
+    if reports_with_timestamps:
+        return max(reports_with_timestamps, key=lambda report: report["generated_at"])
     priority = [
         "cross-region-baseline-r3",
         "cross-region-smoke-r1",

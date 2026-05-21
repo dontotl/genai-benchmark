@@ -18,6 +18,7 @@ from genai_benchmark.runner import (
     invoke_streaming,
     make_thread_local_llm_factory,
 )
+from genai_benchmark.site import choose_focus_report
 
 
 def make_result(
@@ -256,6 +257,27 @@ class DashboardCompatibilityTest(unittest.TestCase):
         self.assertIn("Failure Summary", html)
         self.assertIn("HTTPStatusError", html)
         self.assertIn("opc-123", html)
+
+    def test_dashboard_skips_non_report_json_files(self) -> None:
+        report_payload = {"summary": [], "results": []}
+        state_payload = {"source_label": "runner", "resources": {"instance_id": "ocid1.instance"}}
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            Path(tmp_dir, "report.json").write_text(json.dumps(report_payload), encoding="utf-8")
+            Path(tmp_dir, "runner-state.json").write_text(json.dumps(state_payload), encoding="utf-8")
+            reports = load_reports(Path(tmp_dir))
+
+        self.assertEqual([report["name"] for report in reports], ["report"])
+
+    def test_site_focus_prefers_latest_generated_report(self) -> None:
+        focus = choose_focus_report(
+            [
+                {"name": "cross-region-baseline-r3", "generated_at": "2026-05-20T00:00:00+00:00"},
+                {"name": "ap-osaka-runner-global-smoke-r1", "generated_at": "2026-05-21T00:00:00+00:00"},
+            ]
+        )
+
+        self.assertEqual(focus["name"], "ap-osaka-runner-global-smoke-r1")
 
 
 if __name__ == "__main__":

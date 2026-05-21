@@ -31,6 +31,8 @@ def load_reports(runs_dir: Path) -> list[dict]:
     reports = []
     for path in sorted(runs_dir.glob("*.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
+        if "summary" not in data or "results" not in data:
+            continue
         reports.append(
             {
                 "path": path,
@@ -39,6 +41,7 @@ def load_reports(runs_dir: Path) -> list[dict]:
                 "results": data.get("results", []),
                 "selected_models": data.get("selected_models", []),
                 "skipped": data.get("skipped", []),
+                "generated_at": data.get("generated_at", ""),
             }
         )
     return reports

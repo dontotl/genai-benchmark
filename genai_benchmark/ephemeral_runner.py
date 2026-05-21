@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import json
 import shlex
 import subprocess
 import sys
 import time
+from collections import defaultdict
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Sequence
+
+from .dashboard import load_reports
+from .site import write_docs
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -212,6 +217,7 @@ def render_cloud_init(config: RunnerConfig, runner: Runner, template_path: Path 
         "__RUNNER_USER__": config.runner_user,
         "__SOURCE_LABEL__": quote_env(runner.source_label),
         "__REPORT_NAME__": quote_env(report_name(config, runner)),
+        "__COMPLETION_MARKER__": quote_env(completion_marker_name(config, runner)),
         "__BUCKET_NAME__": quote_env(config.bucket_name),
         "__OBJECT_STORAGE_REGION__": quote_env(config.object_storage_region),
         "__REPO_URL__": quote_env(config.repo_url),
@@ -628,8 +634,8 @@ def object_name(runner: Runner, name: str) -> str:
     return f"runs/{runner.source_label}/{name}"
 
 
-def completion_marker_name(runner: Runner) -> str:
-    return object_name(runner, "_complete.txt")
+def completion_marker_name(config: RunnerConfig, runner: Runner) -> str:
+    return object_name(runner, f"_{report_name(config, runner)}.complete.txt")
 
 
 def object_head_command(config: RunnerConfig, runner: Runner) -> list[str]:
@@ -643,7 +649,7 @@ def object_head_command(config: RunnerConfig, runner: Runner) -> list[str]:
         "--bucket-name",
         config.bucket_name,
         "--name",
-        completion_marker_name(runner),
+        completion_marker_name(config, runner),
     ]
 
 
@@ -844,7 +850,7 @@ def wait_for_completion(
         if result.returncode == 0:
             return
         time.sleep(poll_interval)
-    raise TimeoutError(f"Timed out waiting for Object Storage marker: {completion_marker_name(runner)}")
+    raise TimeoutError(f"Timed out waiting for Object Storage marker: {completion_marker_name(config, runner)}")
 
 
 def collect_reports(config: RunnerConfig, runner: Runner, output_dir: Path, dry_run: bool) -> None:
@@ -855,6 +861,213 @@ def collect_reports(config: RunnerConfig, runner: Runner, output_dir: Path, dry_
             print(shell_join(command))
         else:
             run_command(command)
+
+
+def suite_name(config: RunnerConfig, explicit_name: str | None = None) -> str:
+    return explicit_name or str(
+        config.benchmark.get("suite_name") or config.benchmark.get("report_suffix") or "managed-suite"
+    )
+
+
+def suite_state_path(base_state_path: Path, runner: Runner) -> Path:
+    return base_state_path.parent / f"{runner.source_label}-state.json"
+
+
+def validate_managed_suite_config(config: RunnerConfig, runners: Sequence[Runner], parallelism: int) -> None:
+    if parallelism < 1:
+        raise ConfigError("--parallelism must be at least 1.")
+    if len(runners) > 1 and existing_dynamic_group_update_enabled(config):
+        raise ConfigError(
+            "run-managed-suite with multiple runners requires network.existing_dynamic_group_update=false "
+            "when reusing an existing Dynamic Group. Add a compartment-level runner rule to that group first."
+        )
+
+
+def summarize_report_file(path: Path) -> dict[str, Any]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    config = data.get("benchmark_config", {})
+    results = data.get("results", [])
+    successes = [item for item in results if not item.get("error")]
+    failures = [item for item in results if item.get("error")]
+    by_region: dict[str, list[float]] = defaultdict(list)
+    for item in successes:
+        latency = item.get("latency_seconds")
+        if isinstance(latency, (int, float)):
+            by_region[str(item.get("region") or "unknown")].append(float(latency))
+    latencies = [
+        float(item["latency_seconds"])
+        for item in successes
+        if isinstance(item.get("latency_seconds"), (int, float))
+    ]
+    return {
+        "path": path,
+        "source_label": config.get("source_label") or path.stem,
+        "target_regions": config.get("regions") or [],
+        "attempts": len(results),
+        "successes": len(successes),
+        "failures": len(failures),
+        "avg_latency": (sum(latencies) / len(latencies)) if latencies else None,
+        "target_avg_latency": {
+            region: sum(values) / len(values)
+            for region, values in sorted(by_region.items())
+            if values
+        },
+    }
+
+
+def format_seconds(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.3f}s"
+
+
+def write_suite_summary(
+    config: RunnerConfig,
+    runners: Sequence[Runner],
+    output_dir: Path,
+    name: str,
+    run_statuses: dict[str, str],
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = output_dir / f"{name}-summary.md"
+    generated_at = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    runners_by_label = {runner.source_label: runner for runner in runners}
+    rows = []
+    for runner in runners:
+        json_path = output_dir / f"{report_name(config, runner)}.json"
+        if json_path.exists():
+            rows.append(summarize_report_file(json_path))
+        else:
+            rows.append(
+                {
+                    "path": json_path,
+                    "source_label": runner.source_label,
+                    "target_regions": config.target_regions,
+                    "attempts": 0,
+                    "successes": 0,
+                    "failures": 0,
+                    "avg_latency": None,
+                    "target_avg_latency": {},
+                }
+            )
+    total_attempts = sum(row["attempts"] for row in rows)
+    total_successes = sum(row["successes"] for row in rows)
+    total_failures = sum(row["failures"] for row in rows)
+    lines = [
+        f"# {name} Suite Summary",
+        "",
+        f"- Generated At: `{generated_at}`",
+        f"- Target Regions: {', '.join(f'`{region}`' for region in config.target_regions)}",
+        f"- Attempts: `{total_attempts}`",
+        f"- Successes: `{total_successes}`",
+        f"- Failures: `{total_failures}`",
+        "",
+        "## Source Runner Summary",
+        "",
+        "| Source | Status | Attempts | Successes | Failures | Avg Latency | JSON | Markdown |",
+        "| --- | --- | ---: | ---: | ---: | ---: | --- | --- |",
+    ]
+    for row in rows:
+        source_label = row["source_label"]
+        runner = runners_by_label.get(source_label)
+        json_name = f"{report_name(config, runner)}.json" if runner else row["path"].name
+        md_name = json_name.removesuffix(".json") + ".md"
+        lines.append(
+            "| "
+            f"`{source_label}` | "
+            f"`{run_statuses.get(source_label, 'missing')}` | "
+            f"{row['attempts']} | {row['successes']} | {row['failures']} | "
+            f"{format_seconds(row['avg_latency'])} | "
+            f"[json]({json_name}) | [md]({md_name}) |"
+        )
+    lines.extend(["", "## Target Region Average Latency", "", "| Source | Target Region | Avg Latency |", "| --- | --- | ---: |"])
+    for row in rows:
+        for region in config.target_regions:
+            lines.append(
+                f"| `{row['source_label']}` | `{region}` | "
+                f"{format_seconds(row['target_avg_latency'].get(region))} |"
+            )
+    summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return summary_path
+
+
+def publish_docs(output_dir: Path, docs_dir: Path) -> None:
+    reports = load_reports(output_dir)
+    if reports:
+        write_docs(reports, docs_dir)
+
+
+def run_managed_suite(
+    config: RunnerConfig,
+    runners: Sequence[Runner],
+    output_dir: Path,
+    state_path: Path,
+    poll_interval: int,
+    timeout_seconds: int,
+    keep_on_failure: bool,
+    dry_run: bool,
+    parallelism: int,
+    name: str,
+    docs_dir: Path,
+    publish_site: bool,
+) -> None:
+    validate_managed_suite_config(config, runners, parallelism)
+    if dry_run:
+        for runner in runners:
+            print(f"# Runner: {runner.source_label} ({runner.region})")
+            run_managed_runner(
+                config,
+                runner,
+                output_dir,
+                suite_state_path(state_path, runner),
+                poll_interval,
+                timeout_seconds,
+                keep_on_failure,
+                dry_run=True,
+            )
+            print()
+        print(f"# Would write suite summary: {output_dir / f'{name}-summary.md'}")
+        if publish_site:
+            print(f"# Would publish docs: {docs_dir}")
+        return
+
+    statuses: dict[str, str] = {}
+    errors: dict[str, BaseException] = {}
+    workers = min(parallelism, len(runners))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(
+                run_managed_runner,
+                config,
+                runner,
+                output_dir,
+                suite_state_path(state_path, runner),
+                poll_interval,
+                timeout_seconds,
+                keep_on_failure,
+                False,
+            ): runner
+            for runner in runners
+        }
+        for future in concurrent.futures.as_completed(futures):
+            runner = futures[future]
+            try:
+                future.result()
+            except BaseException as exc:
+                statuses[runner.source_label] = "failed"
+                errors[runner.source_label] = exc
+                print(f"Runner failed: {runner.source_label}: {exc}", file=sys.stderr)
+            else:
+                statuses[runner.source_label] = "succeeded"
+
+    summary_path = write_suite_summary(config, runners, output_dir, name, statuses)
+    print(f"Wrote suite summary: {summary_path}")
+    if publish_site:
+        publish_docs(output_dir, docs_dir)
+        print(f"Wrote docs site to {docs_dir}")
+    if errors:
+        failed = ", ".join(sorted(errors))
+        raise RuntimeError(f"Managed suite failed for runner(s): {failed}")
 
 
 def print_plan(config: RunnerConfig, runners: Iterable[Runner]) -> None:
@@ -917,7 +1130,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runner", action="append", default=[], help="source_label to operate on. Repeatable.")
     parser.add_argument(
         "--action",
-        choices=("plan", "launch", "collect", "terminate", "run", "provision-network", "run-managed", "cleanup-managed"),
+        choices=(
+            "plan",
+            "launch",
+            "collect",
+            "terminate",
+            "run",
+            "provision-network",
+            "run-managed",
+            "run-managed-suite",
+            "cleanup-managed",
+        ),
         default="plan",
         help="Operation to perform. plan only prints commands.",
     )
@@ -930,6 +1153,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--poll-interval", type=int, default=30)
     parser.add_argument("--timeout-seconds", type=int, default=3600)
+    parser.add_argument("--parallelism", type=int, default=3, help="Max concurrent runners for run-managed-suite.")
+    parser.add_argument("--suite-name", help="Name for the suite summary report. Defaults to benchmark.suite_name or report_suffix.")
+    parser.add_argument("--docs-dir", default="docs", help="Where docs artifacts are written after run-managed-suite.")
+    parser.add_argument("--no-publish-site", action="store_true", help="Skip docs dashboard generation after run-managed-suite.")
     parser.add_argument("--keep-on-failure", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Print OCI commands without executing them.")
     return parser.parse_args()
@@ -962,6 +1189,23 @@ def main() -> int:
                 f"Resource state belongs to {source_label}, not {runners[0].source_label}."
             )
         cleanup_managed_resources(config, runners[0], resources, args.dry_run)
+        return 0
+
+    if args.action == "run-managed-suite":
+        run_managed_suite(
+            config,
+            runners,
+            output_dir,
+            Path(args.resource_state),
+            args.poll_interval,
+            args.timeout_seconds,
+            args.keep_on_failure,
+            args.dry_run,
+            args.parallelism,
+            suite_name(config, args.suite_name),
+            Path(args.docs_dir),
+            not args.no_publish_site,
+        )
         return 0
 
     for runner in runners:

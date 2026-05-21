@@ -58,7 +58,7 @@ oci os object put \
   --region "${OBJECT_STORAGE_REGION}" \
   __OCI_AUTH_ARGS__ \
   --bucket-name "${BUCKET_NAME}" \
-  --name "runs/${SOURCE_LABEL}/_complete.txt" \
+  --name "${COMPLETION_MARKER}" \
   --file /tmp/benchmark-complete.txt \
   --force
 RUNNER_SCRIPT
@@ -69,6 +69,7 @@ chown "__RUNNER_USER__:__RUNNER_USER__" /tmp/genai-benchmark-runner.sh
 sudo -iu "__RUNNER_USER__" env \
   SOURCE_LABEL=__SOURCE_LABEL__ \
   REPORT_NAME=__REPORT_NAME__ \
+  COMPLETION_MARKER=__COMPLETION_MARKER__ \
   BUCKET_NAME=__BUCKET_NAME__ \
   OBJECT_STORAGE_REGION=__OBJECT_STORAGE_REGION__ \
   REPO_URL=__REPO_URL__ \
