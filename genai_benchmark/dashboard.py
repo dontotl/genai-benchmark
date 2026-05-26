@@ -269,10 +269,27 @@ def collect_failures(reports: list[dict]) -> list[dict]:
 
 def collect_filter_options(rows: list[dict]) -> dict[str, list[str]]:
     return {
+        "families": sorted({row["family"] for row in rows if row.get("family")}),
         "regions": sorted({row["region"] for row in rows if row.get("region")}),
         "models": sorted({row["model"] for row in rows if row.get("model")}),
         "concurrency": sorted({str(row["concurrency"]) for row in rows}, key=lambda value: int(value)),
     }
+
+
+def collect_skipped_combinations(reports: list[dict]) -> list[dict]:
+    rows = []
+    for report in reports:
+        for item in report.get("skipped", []):
+            rows.append(
+                {
+                    "report": report["name"],
+                    "region": item.get("region", ""),
+                    "family": item.get("family", ""),
+                    "model": item.get("model", ""),
+                    "reason": item.get("reason") or "지원 리전 아님",
+                }
+            )
+    return rows
 
 
 def collect_failure_summary(failures: list[dict]) -> list[dict]:
@@ -316,6 +333,50 @@ body {
 }
 h1, h2 {
   margin: 0 0 16px;
+}
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.info-tooltip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid #b8ad9f;
+  border-radius: 999px;
+  color: #4d463f;
+  background: #fffaf2;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: help;
+}
+.tooltip-box {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  z-index: 20;
+  display: none;
+  width: min(320px, 78vw);
+  padding: 9px 10px;
+  border: 1px solid #cfc5b6;
+  border-radius: 8px;
+  background: #1d1b18;
+  color: #fffdf9;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  box-shadow: 0 8px 24px rgba(46, 39, 31, 0.18);
+}
+.info-tooltip:hover .tooltip-box,
+.info-tooltip:focus .tooltip-box {
+  display: block;
 }
 .lede {
   color: #4d463f;
@@ -413,6 +474,7 @@ h1, h2 {
 .bar-fill.gemini { background: linear-gradient(90deg, #b45309, #f59e0b); }
 .bar-fill.grok { background: linear-gradient(90deg, #1d4ed8, #60a5fa); }
 .bar-fill.meta { background: linear-gradient(90deg, #7c3aed, #c084fc); }
+.bar-fill.cohere { background: linear-gradient(90deg, #be123c, #fb7185); }
 table {
   width: 100%;
   border-collapse: collapse;
@@ -446,6 +508,7 @@ code {
 .pill.gemini { background: #fef3c7; color: #92400e; }
 .pill.grok { background: #dbeafe; color: #1d4ed8; }
 .pill.meta { background: #ede9fe; color: #6d28d9; }
+.pill.cohere { background: #ffe4e6; color: #be123c; }
 a { color: #8b5e34; text-decoration: none; }
 a:hover { text-decoration: underline; }
 .scatter {
@@ -471,6 +534,7 @@ a:hover { text-decoration: underline; }
 .dot.gemini { fill: #f59e0b; }
 .dot.grok { fill: #60a5fa; }
 .dot.meta { fill: #c084fc; }
+.dot.cohere { fill: #fb7185; }
 .dot-label {
   fill: #4d463f;
   font-size: 10px;
@@ -498,6 +562,31 @@ a:hover { text-decoration: underline; }
 .legend-dot.gemini { background: #f59e0b; }
 .legend-dot.grok { background: #60a5fa; }
 .legend-dot.meta { background: #c084fc; }
+.legend-dot.cohere { background: #fb7185; }
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 14px;
+}
+.tab-button {
+  border: 1px solid #cfc5b6;
+  border-radius: 8px;
+  background: #fffaf2;
+  color: #4d463f;
+  font: inherit;
+  font-weight: 700;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.tab-button.active {
+  background: #1d1b18;
+  border-color: #1d1b18;
+  color: #fffdf9;
+}
+.tab-panel.hidden {
+  display: none;
+}
 .matrix-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.9fr);
@@ -632,6 +721,20 @@ pre {
   .context-grid { grid-template-columns: 1fr; }
 }
 """
+
+
+def info_icon(description: str) -> str:
+    text = escape(description)
+    return (
+        "<span class='info-tooltip' tabindex='0' aria-label='설명' title='마우스를 올리면 설명이 표시됩니다'>"
+        "i"
+        f"<span class='tooltip-box'>{text}</span>"
+        "</span>"
+    )
+
+
+def title_html(level: int, title: str, description: str) -> str:
+    return f"<h{level} class='section-title'>{escape(title)}{info_icon(description)}</h{level}>"
 
 
 WORKLOAD_DESCRIPTIONS = {
@@ -783,14 +886,14 @@ def render_runner_context(summary: dict, reports: list[dict]) -> str:
     return (
         "<div class='section'>"
         "<div class='panel'>"
-        "<h2>Test Context</h2>"
-        "<p class='muted'>This suite sends the same workload set from each source runner to each target region, then compares latency, throughput, and success rate.</p>"
+        + title_html(2, "Test Context", "벤치마크 실행 조건, 선택 모델, workload, 동시성, 생성 설정을 한곳에서 확인합니다.")
+        + "<p class='muted'>각 source runner가 같은 workload를 target region으로 보내고 latency, 처리량, 성공률을 비교합니다.</p>"
         "<ul class='context-list'>"
         f"<li>Models tested:<ul>{model_items}</ul></li>"
         f"<li>Workloads tested: <code>{escape(', '.join(case_ids) if case_ids else '-')}</code></li>"
         f"<li>Execution: repeats <code>{escape(str(repeats))}</code>, concurrency <code>{escape(concurrency)}</code>, streaming <code>{streaming}</code></li>"
         f"<li>Generation settings: temperature <code>{escape(str(temperature))}</code>, max tokens <code>{escape(str(max_tokens))}</code></li>"
-        "<li>Interpretation: lower latency and higher output tokens/sec are better. This is a smoke benchmark, not a full quality or load test.</li>"
+        "<li>해석 기준: latency는 낮을수록, output tokens/sec는 높을수록 좋습니다. 이 값은 품질 평가가 아니라 속도와 안정성 중심의 실행 지표입니다.</li>"
         "</ul>"
         "</div></div>"
     )
@@ -821,7 +924,162 @@ def metric_row_from_values(values: list[dict]) -> dict:
     }
 
 
-def source_target_metrics(summary: dict, reports: list[dict]) -> dict[tuple[str, str], dict]:
+def aggregate_concurrency_metrics(case_rows: list[dict]) -> list[dict]:
+    grouped: dict[int, list[dict]] = defaultdict(list)
+    for row in case_rows:
+        grouped[int(row.get("concurrency", 1))].append(row)
+    return [
+        {"concurrency": concurrency, **metric_row_from_values(values)}
+        for concurrency, values in sorted(grouped.items())
+    ]
+
+
+def aggregate_model_concurrency_metrics(case_rows: list[dict]) -> list[dict]:
+    grouped: dict[tuple[str, str, int], list[dict]] = defaultdict(list)
+    for row in case_rows:
+        grouped[(row["family"], row["model"], int(row.get("concurrency", 1)))].append(row)
+    rows = []
+    for (family, model, concurrency), values in sorted(grouped.items()):
+        rows.append(
+            {
+                "family": family,
+                "model": model,
+                "concurrency": concurrency,
+                **metric_row_from_values(values),
+            }
+        )
+    return rows
+
+
+def c50_or_max_concurrency(case_rows: list[dict]) -> int | None:
+    levels = sorted({int(row.get("concurrency", 1)) for row in case_rows})
+    if not levels:
+        return None
+    return 50 if 50 in levels else levels[-1]
+
+
+def render_load_summary(case_rows: list[dict]) -> str:
+    rows = aggregate_concurrency_metrics(case_rows)
+    if not rows:
+        return ""
+    by_concurrency = {row["concurrency"]: row for row in rows}
+    c1 = by_concurrency.get(1)
+    c50 = by_concurrency.get(50)
+    multiplier = None
+    if c1 and c50 and c1.get("p95_latency") and c50.get("p95_latency"):
+        multiplier = c50["p95_latency"] / c1["p95_latency"]
+
+    body = []
+    for row in rows:
+        label = f"C{row['concurrency']}"
+        body.append(
+            "<tr>"
+            f"<td><strong>{escape(label)}</strong></td>"
+            f"<td>{row['successes']}/{row['attempts']} ({escape(format_percent(row['success_rate']))})</td>"
+            f"<td>{escape(format_latency(row['p95_latency']))}</td>"
+            f"<td>{escape(format_number(row['avg_tokens_per_second']))}</td>"
+            f"<td>{escape(format_latency(row['avg_ttft']))}</td>"
+            "</tr>"
+        )
+
+    multiplier_text = f"{multiplier:.2f}x" if multiplier is not None else "-"
+    return (
+        "<div class='section'>"
+        + title_html(2, "Load Summary", "동시성 수준별로 성공률, P95 latency, tokens/sec, TTFT를 요약합니다.")
+        + "<p class='muted'>C1, C10, C50 기준으로 success rate, P95 latency, output tokens/sec, TTFT를 요약합니다. C50/C1 latency multiplier는 부하가 커질 때 P95가 얼마나 증가했는지 보여줍니다.</p>"
+        "<table><thead><tr><th>Concurrency</th><th>Success</th><th>P95 Latency</th><th>Tok/sec</th><th>TTFT</th></tr></thead><tbody>"
+        + "".join(body)
+        + "</tbody></table>"
+        f"<p class='muted'><strong>C50/C1 latency multiplier:</strong> {escape(multiplier_text)}</p>"
+        "</div>"
+    )
+
+
+def render_c50_ranking(case_rows: list[dict]) -> str:
+    target_concurrency = c50_or_max_concurrency(case_rows)
+    if target_concurrency is None:
+        return ""
+    rows = [
+        row
+        for row in aggregate_model_concurrency_metrics(case_rows)
+        if row["concurrency"] == target_concurrency
+    ]
+    rows.sort(
+        key=lambda row: (
+            -(row["success_rate"] or 0),
+            row["p95_latency"] if row["p95_latency"] is not None else float("inf"),
+            -(row["avg_tokens_per_second"] or 0),
+            row["family"],
+            row["model"],
+        )
+    )
+    body = []
+    for index, row in enumerate(rows, start=1):
+        body.append(
+            "<tr>"
+            f"<td>{index}</td>"
+            f"<td><span class='pill {escape(row['family'])}'>{escape(row['family'])}</span></td>"
+            f"<td><code>{escape(row['model'])}</code></td>"
+            f"<td>{row['successes']}/{row['attempts']} ({escape(format_percent(row['success_rate']))})</td>"
+            f"<td>{escape(format_latency(row['p95_latency']))}</td>"
+            f"<td>{escape(format_number(row['avg_tokens_per_second']))}</td>"
+            f"<td>{escape(format_latency(row['avg_ttft']))}</td>"
+            "</tr>"
+        )
+    return (
+        "<div class='section'>"
+        + title_html(2, f"C{target_concurrency} Ranking", "가장 높은 동시성 기준으로 모델 순위를 비교합니다. 성공률을 먼저 보고, 그 다음 P95 latency와 tokens/sec를 봅니다.")
+        + "<p class='muted'>기본 정렬은 success rate를 최우선으로 보고, 그 다음 P95 latency, output tokens/sec 순서로 비교합니다.</p>"
+        "<table><thead><tr><th>Rank</th><th>Family</th><th>Model</th><th>Success</th><th>P95 Latency</th><th>Tok/sec</th><th>TTFT</th></tr></thead><tbody>"
+        + "".join(body)
+        + "</tbody></table></div>"
+    )
+
+
+def render_load_sensitivity(case_rows: list[dict]) -> str:
+    rows = aggregate_model_concurrency_metrics(case_rows)
+    if not rows:
+        return ""
+    by_model: dict[tuple[str, str], dict[int, dict]] = defaultdict(dict)
+    for row in rows:
+        by_model[(row["family"], row["model"])][row["concurrency"]] = row
+    levels = sorted({row["concurrency"] for row in rows})
+    headers = "".join(f"<th>C{level}</th>" for level in levels)
+    body = []
+    for (family, model), values in sorted(by_model.items()):
+        cells = []
+        for level in levels:
+            row = values.get(level)
+            if row is None:
+                cells.append("<td>-</td>")
+            else:
+                cells.append(
+                    "<td>"
+                    f"P95 {escape(format_latency(row['p95_latency']))}<br>"
+                    f"Success {escape(format_percent(row['success_rate']))}<br>"
+                    f"TTFT {escape(format_latency(row['avg_ttft']))}"
+                    "</td>"
+                )
+        body.append(
+            "<tr>"
+            f"<td><span class='pill {escape(family)}'>{escape(family)}</span></td>"
+            f"<td><code>{escape(model)}</code></td>"
+            + "".join(cells)
+            + "</tr>"
+        )
+    return (
+        "<div class='section'>"
+        + title_html(2, "Load Sensitivity", "모델별로 C1에서 C10, C50으로 올라갈 때 latency와 성공률이 어떻게 변하는지 보여줍니다.")
+        + "<p class='muted'>모델별 C1 -> C10 -> C50 변화를 통해 동시성이 커질 때 latency 증가나 성공률 하락이 어디서 발생하는지 확인합니다.</p>"
+        "<table><thead><tr><th>Family</th><th>Model</th>"
+        + headers
+        + "</tr></thead><tbody>"
+        + "".join(body)
+        + "</tbody></table></div>"
+    )
+
+
+def source_target_metrics(summary: dict, reports: list[dict], concurrency: int | None = None) -> dict[tuple[str, str], dict]:
     selected_reports = suite_reports(summary, reports)
     source_by_report = {
         Path(row["json"]).stem: row["source"]
@@ -832,6 +1090,8 @@ def source_target_metrics(summary: dict, reports: list[dict]) -> dict[tuple[str,
     for report in selected_reports:
         source = source_by_report.get(report["name"]) or report_source_label(report)
         for item in aggregate_case_metrics([report]):
+            if concurrency is not None and item.get("concurrency", 1) != concurrency:
+                continue
             rows_by_source_target[(source, item["region"])].append(item)
     return {
         key: metric_row_from_values(values)
@@ -842,7 +1102,8 @@ def source_target_metrics(summary: dict, reports: list[dict]) -> dict[tuple[str,
 def prompt_paths_from_reports(reports: list[dict]) -> list[Path]:
     paths = []
     for report in reports:
-        prompt_path = report.get("benchmark_config", {}).get("prompts")
+        config = report.get("benchmark_config", {})
+        prompt_path = config.get("prompt_file") or config.get("prompts")
         if not prompt_path:
             continue
         path = Path(prompt_path)
@@ -894,7 +1155,7 @@ def load_workload_prompts(reports: list[dict]) -> dict[str, list[dict[str, str]]
 
 def render_prompt_messages(messages: list[dict[str, str]]) -> str:
     if not messages:
-        return "<p class='muted'>Prompt source was not found for this workload.</p>"
+        return "<p class='muted'>이 workload의 prompt 원문을 찾지 못했습니다.</p>"
     blocks = []
     for message in messages:
         blocks.append(
@@ -908,7 +1169,7 @@ def render_prompt_messages(messages: list[dict[str, str]]) -> str:
 
 def render_workload_metric_table(rows: list[dict]) -> str:
     if not rows:
-        return "<p class='muted'>No measured rows found for this workload.</p>"
+        return "<p class='muted'>이 workload에 대한 측정 결과가 없습니다.</p>"
     body = []
     for row in rows:
         body.append(
@@ -951,8 +1212,8 @@ def render_workload_details(case_rows: list[dict], reports: list[dict]) -> str:
         rows = [row for row in case_rows if row["case_id"] == case_id]
         cards.append(
             "<div class='workload-item workload-detail'>"
-            f"<h3><code>{escape(case_id)}</code></h3>"
-            f"<p class='muted'>{escape(description)}</p>"
+            + title_html(3, case_id, description)
+            + f"<p class='muted'>{escape(description)}</p>"
             "<div class='workload-meta'>"
             f"<span>Type: <code>{escape(kind)}</code></span>"
             f"<span>Expected output: {escape(expected)}</span>"
@@ -966,8 +1227,8 @@ def render_workload_details(case_rows: list[dict], reports: list[dict]) -> str:
         )
     return (
         "<div class='section'>"
-        "<h2>Workload Details</h2>"
-        "<p class='muted'>각 테스트 케이스가 무엇을 시키는지와, workload별 latency/token/sec/TTFT 결과를 함께 보여줍니다.</p>"
+        + title_html(2, "Workload Details", "각 workload의 목적, 기대 출력, prompt 원문, 모델별 측정치를 확인합니다.")
+        + "<p class='muted'>각 테스트 케이스가 무엇을 시키는지와, workload별 latency/token/sec/TTFT 결과를 함께 보여줍니다.</p>"
         "<div class='workload-grid'>"
         f"{''.join(cards)}"
         "</div></div>"
@@ -985,7 +1246,14 @@ def render_runner_matrix(summaries: list[dict], reports: list[dict]) -> str:
         (row["source"], row["target_region"]): row["avg_latency"]
         for row in summary["target_latency"]
     }
-    metrics_by_pair = source_target_metrics(summary, reports)
+    selected_reports = suite_reports(summary, reports)
+    concurrency_levels = sorted(
+        {
+            int(item.get("concurrency", 1))
+            for report in selected_reports
+            for item in report.get("summary", [])
+        }
+    ) or [1]
     latencies = [value for value in latency_by_pair.values() if value is not None]
     minimum = min(latencies) if latencies else 0.0
     maximum = max(latencies) if latencies else 0.0
@@ -1009,35 +1277,58 @@ def render_runner_matrix(summaries: list[dict], reports: list[dict]) -> str:
             target_best[target] = min(values, key=lambda item: item[1])
 
     grid_columns = "150px " + " ".join("minmax(130px, 1fr)" for _ in targets)
-    cells = [
-        f"<div class='heatmap' style='grid-template-columns:{grid_columns}'>",
-        "<div class='heat-cell header'>Source / Target</div>",
-    ]
-    for target in targets:
-        cells.append(f"<div class='heat-cell header'><code>{escape(target)}</code></div>")
-    for source in sources:
-        cells.append(f"<div class='heat-cell source'><code>{escape(source)}</code></div>")
-        for target in targets:
-            latency = latency_by_pair.get((source, target))
-            labels = []
-            if source_best.get(source, (None, None))[0] == target:
-                labels.append("source best")
-            if target_best.get(target, (None, None))[0] == source:
-                labels.append("target best")
-            note = ", ".join(labels) if labels else "avg latency"
-            metrics = metrics_by_pair.get((source, target), {})
-            cells.append(
-                "<div class='heat-cell' "
-                f"style='background:{heat_color(latency, minimum, maximum)}'>"
-                f"<div class='heat-value'>{escape(format_latency(latency))}</div>"
-                f"<div class='heat-note'>{escape(note)} · {escape(latency_grade(latency))}</div>"
-                f"<div class='heat-note'>P95 {escape(format_latency(metrics.get('p95_latency')))}</div>"
-                f"<div class='heat-note'>Tok/sec {escape(format_number(metrics.get('avg_tokens_per_second')))}</div>"
-                f"<div class='heat-note'>Success {escape(format_percent(metrics.get('success_rate')))}</div>"
-                f"<div class='heat-note'>TTFT {escape(format_latency(metrics.get('avg_ttft')))}</div>"
-                "</div>"
+    tab_buttons = []
+    panels = []
+    for index, concurrency in enumerate(concurrency_levels):
+        active = index == 0
+        label = f"C{concurrency}"
+        tab_buttons.append(
+            "<button class='tab-button{active}' type='button' data-tab-target='heatmap-{concurrency}'>{label}</button>".format(
+                active=" active" if active else "",
+                concurrency=concurrency,
+                label=escape(label),
             )
-    cells.append("</div>")
+        )
+        metrics_by_pair = source_target_metrics(summary, reports, concurrency)
+        heat_values = [
+            metrics.get("p95_latency") or metrics.get("avg_latency")
+            for metrics in metrics_by_pair.values()
+            if metrics.get("p95_latency") is not None or metrics.get("avg_latency") is not None
+        ] or latencies
+        heat_minimum = min(heat_values) if heat_values else minimum
+        heat_maximum = max(heat_values) if heat_values else maximum
+        cells = [
+            f"<div id='heatmap-{concurrency}' class='tab-panel{' hidden' if not active else ''}'>",
+            f"<div class='heatmap' style='grid-template-columns:{grid_columns}'>",
+            "<div class='heat-cell header'>Source / Target</div>",
+        ]
+        for target in targets:
+            cells.append(f"<div class='heat-cell header'><code>{escape(target)}</code></div>")
+        for source in sources:
+            cells.append(f"<div class='heat-cell source'><code>{escape(source)}</code></div>")
+            for target in targets:
+                metrics = metrics_by_pair.get((source, target), {})
+                latency = metrics.get("p95_latency") or metrics.get("avg_latency") or latency_by_pair.get((source, target))
+                labels = []
+                if source_best.get(source, (None, None))[0] == target:
+                    labels.append("source best")
+                if target_best.get(target, (None, None))[0] == source:
+                    labels.append("target best")
+                note = ", ".join(labels) if labels else "avg latency"
+                cells.append(
+                    "<div class='heat-cell' "
+                    f"style='background:{heat_color(latency, heat_minimum, heat_maximum)}'>"
+                    f"<div class='heat-value'>{escape(format_latency(latency))}</div>"
+                    f"<div class='heat-note'>{escape(note)} · {escape(latency_grade(latency))}</div>"
+                    f"<div class='heat-note'>P95 {escape(format_latency(metrics.get('p95_latency')))}</div>"
+                    f"<div class='heat-note'>Tok/sec {escape(format_number(metrics.get('avg_tokens_per_second')))}</div>"
+                    f"<div class='heat-note'>Success {escape(format_percent(metrics.get('success_rate')))}</div>"
+                    f"<div class='heat-note'>TTFT {escape(format_latency(metrics.get('avg_ttft')))}</div>"
+                    "</div>"
+                )
+        cells.append("</div></div>")
+        panels.append("".join(cells))
+    heatmap_html = "<div class='tabs'>" + "".join(tab_buttons) + "</div>" + "".join(panels)
 
     source_rows = {row["source"]: row for row in summary["sources"]}
     tiles = ["<div class='runner-tiles'>"]
@@ -1053,8 +1344,8 @@ def render_runner_matrix(summaries: list[dict], reports: list[dict]) -> str:
         success_rate = (row["successes"] / row["attempts"] * 100) if row["attempts"] else 0.0
         tiles.append(
             "<div class='runner-tile'>"
-            f"<h3><code>{escape(source)}</code></h3>"
-            f"<div class='tile-metric'>{escape(format_latency(row['avg_latency']))}</div>"
+            + title_html(3, source, "이 source runner에서 실행된 전체 요청의 평균 latency, fastest target, slowest target, success rate입니다.")
+            + f"<div class='tile-metric'>{escape(format_latency(row['avg_latency']))}</div>"
             f"<div class='tile-line'>Best target: <code>{escape(best[0])}</code> ({escape(format_latency(best[1]))})</div>"
             f"<div class='tile-line'>Worst target: <code>{escape(worst[0])}</code> ({escape(format_latency(worst[1]))})</div>"
             f"<div class='tile-line'>Success: {row['successes']}/{row['attempts']} ({success_rate:.1f}%)</div>"
@@ -1064,13 +1355,15 @@ def render_runner_matrix(summaries: list[dict], reports: list[dict]) -> str:
 
     return (
         "<div class='section'>"
-        f"<h2>Region-to-Region Performance: {escape(summary['name'])}</h2>"
-        "<p class='muted'>This heatmap keeps the existing suite latency values and adds metrics from each runner JSON report. Lower latency and higher output tokens/sec are better.</p>"
-        "<div class='matrix-grid'>"
-        f"<div class='panel'>{''.join(cells)}</div>"
-        "<div class='panel'><h2>Metric Guide</h2>"
-        "<p class='muted'>Latency grade: Good &lt; 2s, Watch 2-4s, Slow >= 4s. TTFT is only available when the run captured first-token timing; otherwise it is shown as '-'.</p>"
-        f"<h2>Runner Summary</h2><p class='muted'>Each tile summarizes one source runner: its overall average latency, fastest target, slowest target, and success rate.</p>{''.join(tiles)}</div>"
+        + title_html(2, f"Region-to-Region Performance: {summary['name']}", "source runner와 target region 조합별 성능을 heatmap으로 비교합니다.")
+        + "<p class='muted'>이 heatmap은 suite latency 값에 각 runner JSON report의 P95, success rate, tokens/sec, TTFT를 함께 표시합니다. latency는 낮을수록, tokens/sec는 높을수록 좋습니다.</p>"
+        + "<div class='matrix-grid'>"
+        f"<div class='panel'>{heatmap_html}</div>"
+        "<div class='panel'>"
+        + title_html(2, "Metric Guide", "heatmap 셀에 표시되는 latency 등급과 보조 지표의 의미를 설명합니다.")
+        + "<p class='muted'>Latency grade는 Good &lt; 2s, Watch 2-4s, Slow &gt;= 4s 기준입니다. TTFT는 streaming으로 첫 토큰 시각이 잡힌 실행에서만 표시되고, 없으면 '-'로 표시됩니다.</p>"
+        + title_html(2, "Runner Summary", "source runner별 전체 평균 latency와 가장 빠른/느린 target, 성공률을 요약합니다.")
+        + f"<p class='muted'>각 tile은 source runner 하나의 전체 평균 latency, fastest target, slowest target, success rate를 요약합니다.</p>{''.join(tiles)}</div>"
         "</div>"
         f"{render_runner_context(summary, reports)}"
         "</div>"
@@ -1079,7 +1372,10 @@ def render_runner_matrix(summaries: list[dict], reports: list[dict]) -> str:
 
 def render_bars(rows: list[dict], metric: str, title: str, value_suffix: str) -> str:
     max_value = max((row[metric] or 0) for row in rows) if rows else 0
-    chunks = [f"<div class='panel'><h2>{escape(title)}</h2>"]
+    chunks = [
+        "<div class='panel'>"
+        + title_html(2, title, "report와 model family 단위로 집계된 bar chart입니다.")
+    ]
     for row in rows:
         raw_value = row[metric] or 0
         width = (raw_value / max_value * 100) if max_value else 0
@@ -1098,7 +1394,10 @@ def render_bars(rows: list[dict], metric: str, title: str, value_suffix: str) ->
 
 def render_case_bars(rows: list[dict], metric: str, title: str, value_suffix: str) -> str:
     max_value = max((row[metric] or 0) for row in rows) if rows else 0
-    chunks = [f"<div class='panel'><h2>{escape(title)}</h2>"]
+    chunks = [
+        "<div class='panel'>"
+        + title_html(2, title, "case 단위로 성공률, latency, tokens/sec가 어디서 달라지는지 보여줍니다.")
+    ]
     for row in rows:
         raw_value = row[metric] or 0
         width = (raw_value / max_value * 100) if max_value else 0
@@ -1106,7 +1405,7 @@ def render_case_bars(rows: list[dict], metric: str, title: str, value_suffix: st
         shown = f"{raw_value:.1f}{value_suffix}" if isinstance(raw_value, float) else f"{raw_value}{value_suffix}"
         chunks.append(
             "<div class='bar-row filterable' "
-            f"data-region='{escape(row['region'])}' data-model='{escape(row['model'])}' "
+            f"data-family='{escape(row['family'])}' data-region='{escape(row['region'])}' data-model='{escape(row['model'])}' "
             f"data-concurrency='{row['concurrency']}'>"
             f"<div class='bar-label'><span>{escape(label)}</span><span>{escape(shown)}</span></div>"
             "<div class='bar-track'>"
@@ -1135,7 +1434,9 @@ def render_reports_table(reports: list[dict]) -> str:
             "</tr>"
         )
     return (
-        "<div class='section'><h2>Reports</h2><table><thead><tr>"
+        "<div class='section'>"
+        + title_html(2, "Reports", "dashboard에 포함된 benchmark JSON/Markdown report 파일 목록입니다.")
+        + "<table><thead><tr>"
         "<th>Report</th><th>Attempts</th><th>Successes</th><th>Failures</th><th>Files</th>"
         "</tr></thead><tbody>"
         + "".join(rows)
@@ -1161,7 +1462,7 @@ def render_case_table(rows: list[dict]) -> str:
         )
         body.append(
             "<tr class='filterable sortable-row' "
-            f"data-region='{escape(row['region'])}' data-model='{escape(row['model'])}' "
+            f"data-family='{escape(row['family'])}' data-region='{escape(row['region'])}' data-model='{escape(row['model'])}' "
             f"data-concurrency='{row['concurrency']}' data-success-rate='{row['success_rate']:.6f}' "
             f"data-avg-latency='{row['avg_latency'] if row['avg_latency'] is not None else ''}' "
             f"data-p99-latency='{row['p99_latency'] if row['p99_latency'] is not None else ''}' "
@@ -1185,7 +1486,9 @@ def render_case_table(rows: list[dict]) -> str:
             "</tr>"
         )
     return (
-        "<div class='section'><h2>Case Detail</h2><table><thead><tr>"
+        "<div class='section'>"
+        + title_html(2, "Case Detail", "region, family, model, case, concurrency 조합별 상세 측정 결과입니다.")
+        + "<table><thead><tr>"
         "<th>Report</th><th>Region</th><th>Family</th><th>Model</th><th>Case</th><th>Concurrency</th><th>Streaming</th><th>Success</th><th>Success Rate</th><th>Avg Latency</th><th>P95</th><th>P99</th><th>Avg TTFT</th><th>Avg Tokens</th><th>Avg E2E Output Tokens/sec</th><th>Avg Post-TTFT Output Tokens/sec</th>"
         "</tr></thead><tbody id='case-detail-body'>"
         + "".join(body)
@@ -1197,9 +1500,9 @@ def render_scatter(rows: list[dict], title: str) -> str:
     plotted = [row for row in rows if row["avg_tokens"] is not None and row["avg_latency"] is not None]
     if not plotted:
         return (
-            "<div class='panel'><h2>"
-            + escape(title)
-            + "</h2><p class='muted'>No successful rows with both latency and token data.</p></div>"
+            "<div class='panel'>"
+            + title_html(2, title, "생성 token 수와 latency의 관계를 scatter plot으로 보여줍니다.")
+            + "<p class='muted'>latency와 token 데이터가 모두 있는 성공 row가 없습니다.</p></div>"
         )
 
     max_tokens = max(row["avg_tokens"] for row in plotted) or 1
@@ -1223,7 +1526,7 @@ def render_scatter(rows: list[dict], title: str) -> str:
         )
         points.append(
             "<g class='filterable' "
-            f"data-region='{escape(row['region'])}' data-model='{escape(row['model'])}' "
+            f"data-family='{escape(row['family'])}' data-region='{escape(row['region'])}' data-model='{escape(row['model'])}' "
             f"data-concurrency='{row['concurrency']}'>"
             f"<circle cx='{x:.1f}' cy='{y:.1f}' r='6' class='dot {escape(row['family'])}'>"
             f"<title>{escape(label)}</title></circle>"
@@ -1255,13 +1558,14 @@ def render_scatter(rows: list[dict], title: str) -> str:
         "<span><span class='legend-dot gemini'></span>gemini</span>"
         "<span><span class='legend-dot grok'></span>grok</span>"
         "<span><span class='legend-dot meta'></span>meta</span>"
+        "<span><span class='legend-dot cohere'></span>cohere</span>"
         "</div>"
     )
 
     return (
         "<div class='panel'>"
-        f"<h2>{escape(title)}</h2>"
-        "<p class='muted'>X axis is average total tokens. Y axis is average latency. Hover a point to see the exact report/case tuple.</p>"
+        + title_html(2, title, "생성 token 수가 많아서 느린 것인지, 같은 token 규모에서도 느린 것인지 확인합니다.")
+        + "<p class='muted'>X축은 평균 total tokens, Y축은 평균 latency입니다. 점에 마우스를 올리면 report/case 조합을 확인할 수 있습니다.</p>"
         f"{legend}"
         f"<svg viewBox='0 0 {width} {height}' class='scatter' role='img' aria-label='{escape(title)}'>"
         f"<line x1='{pad_left}' y1='{pad_top + plot_height}' x2='{width - pad_right}' y2='{pad_top + plot_height}' class='axis' />"
@@ -1276,7 +1580,11 @@ def render_scatter(rows: list[dict], title: str) -> str:
 
 def render_failures_table(failures: list[dict]) -> str:
     if not failures:
-        return "<div class='section'><h2>Failures</h2><p class='muted'>No failures recorded.</p></div>"
+        return (
+            "<div class='section'>"
+            + title_html(2, "Failures", "실패한 개별 요청의 오류 유형, HTTP 상태, request id, 응답 본문 일부를 보여줍니다.")
+            + "<p class='muted'>기록된 실패가 없습니다.</p></div>"
+        )
     rows = []
     for failure in failures:
         status = failure["http_status"] if failure["http_status"] is not None else "-"
@@ -1285,7 +1593,7 @@ def render_failures_table(failures: list[dict]) -> str:
         body_preview = failure["response_body_preview"] or "-"
         rows.append(
             "<tr class='filterable' "
-            f"data-region='{escape(failure.get('region') or '')}' data-model='{escape(failure['model'])}' "
+            f"data-family='{escape(failure['family'])}' data-region='{escape(failure.get('region') or '')}' data-model='{escape(failure['model'])}' "
             f"data-concurrency='{failure['concurrency']}'>"
             f"<td><code>{escape(failure['report'])}</code></td>"
             f"<td><code>{escape(failure.get('region') or '-')}</code></td>"
@@ -1303,7 +1611,9 @@ def render_failures_table(failures: list[dict]) -> str:
             "</tr>"
         )
     return (
-        "<div class='section'><h2>Failures</h2><table><thead><tr>"
+        "<div class='section'>"
+        + title_html(2, "Failures", "실패한 개별 요청의 오류 유형, HTTP 상태, request id, 응답 본문 일부를 보여줍니다.")
+        + "<table><thead><tr>"
         "<th>Report</th><th>Region</th><th>Family</th><th>Model</th><th>Case</th><th>Concurrency</th><th>Iter</th><th>Latency</th><th>Type</th><th>HTTP</th><th>Request ID</th><th>Error</th><th>Body Preview</th>"
         "</tr></thead><tbody>"
         + "".join(rows)
@@ -1313,7 +1623,11 @@ def render_failures_table(failures: list[dict]) -> str:
 
 def render_failure_summary_table(rows: list[dict]) -> str:
     if not rows:
-        return "<div class='section'><h2>Failure Summary</h2><p class='muted'>No failures recorded.</p></div>"
+        return (
+            "<div class='section'>"
+            + title_html(2, "Failure Summary", "오류를 report, family, model, HTTP status, error type별로 묶어 보여줍니다.")
+            + "<p class='muted'>기록된 실패가 없습니다.</p></div>"
+        )
     body = []
     for row in rows:
         body.append(
@@ -1327,9 +1641,42 @@ def render_failure_summary_table(rows: list[dict]) -> str:
             "</tr>"
         )
     return (
-        "<div class='section'><h2>Failure Summary</h2><table><thead><tr>"
+        "<div class='section'>"
+        + title_html(2, "Failure Summary", "오류를 report, family, model, HTTP status, error type별로 묶어 보여줍니다.")
+        + "<table><thead><tr>"
         "<th>Report</th><th>Family</th><th>Model</th><th>HTTP</th><th>Type</th><th>Count</th>"
         "</tr></thead><tbody>"
+        + "".join(body)
+        + "</tbody></table></div>"
+    )
+
+
+def render_skipped_table(rows: list[dict]) -> str:
+    if not rows:
+        return (
+            "<div class='section'>"
+            + title_html(2, "Skipped Region/Model Combinations", "catalog 기준으로 해당 region에서 지원되지 않아 실행하지 않은 model/region 조합입니다.")
+            + "<p class='muted'>skip된 미지원 region/model 조합이 없습니다.</p></div>"
+        )
+    body = []
+    for row in rows:
+        body.append(
+            "<tr class='filterable' "
+            f"data-family='{escape(row['family'])}' data-region='{escape(row['region'])}' data-model='{escape(row['model'])}' "
+            "data-concurrency=''>"
+            f"<td><code>{escape(row['report'])}</code></td>"
+            f"<td><code>{escape(row['region'])}</code></td>"
+            f"<td><span class='pill {escape(row['family'])}'>{escape(row['family'])}</span></td>"
+            f"<td><code>{escape(row['model'])}</code></td>"
+            f"<td>지원 리전 아님</td>"
+            f"<td>{escape(row['reason'])}</td>"
+            "</tr>"
+        )
+    return (
+        "<div class='section'>"
+        + title_html(2, "Skipped Region/Model Combinations", "catalog 기준으로 해당 region에서 지원되지 않아 실행하지 않은 model/region 조합입니다.")
+        + "<p class='muted'>미지원 model/region 조합은 runtime failure와 구분되도록 별도 표로 표시합니다.</p>"
+        "<table><thead><tr><th>Report</th><th>Region</th><th>Family</th><th>Model</th><th>Status</th><th>Reason</th></tr></thead><tbody>"
         + "".join(body)
         + "</tbody></table></div>"
     )
@@ -1343,6 +1690,8 @@ def render_filter_controls(options: dict[str, list[str]]) -> str:
 
     return (
         "<div class='filters' aria-label='Dashboard filters'>"
+        "<div class='field'><label for='family-filter'>Family</label>"
+        f"<select id='family-filter' data-filter='family'>{option_tags(options['families'])}</select></div>"
         "<div class='field'><label for='region-filter'>Region</label>"
         f"<select id='region-filter' data-filter='region'>{option_tags(options['regions'])}</select></div>"
         "<div class='field'><label for='model-filter'>Model</label>"
@@ -1372,14 +1721,14 @@ def render_raw_debug_details(
         "<div class='section'>"
         "<details class='debug-details'>"
         "<summary>Raw Data / Debug Details</summary>"
-        "<p class='muted'>Result files, family-level charts, case-level metrics, and failure diagnostics for operational debugging.</p>"
+        "<p class='muted'>운영 디버깅을 위해 result file, family-level chart, case-level metric, failure diagnostic을 접어 둔 영역입니다.</p>"
         "<div class='chart-grid'>"
         f"{render_bars(family_rows, 'success_rate', 'Success Rate by Report / Family', '%')}"
         f"{render_bars(family_rows, 'avg_latency', 'Average Latency by Report / Family', 's')}"
         "</div>"
         "<div class='section'>"
-        "<h2>Case-Level Charts</h2>"
-        "<p class='muted'>Each bar below represents one report/family/case combination so you can see where failures or slowdowns concentrate.</p>"
+        + title_html(2, "Case-Level Charts", "report/family/case 조합별로 실패나 지연이 집중되는 위치를 확인합니다.")
+        + "<p class='muted'>각 bar는 report/family/case 조합 하나를 나타내며, 실패나 slowdown이 어디에 몰리는지 확인할 수 있습니다.</p>"
         "</div>"
         "<div class='chart-grid'>"
         f"{render_case_bars(case_rows, 'success_rate', 'Success Rate by Case', '%')}"
@@ -1436,15 +1785,26 @@ def javascript() -> str:
     return """
 function selectedFilters() {
   return {
+    family: document.querySelector('[data-filter="family"]').value,
     region: document.querySelector('[data-filter="region"]').value,
     model: document.querySelector('[data-filter="model"]').value,
     concurrency: document.querySelector('[data-filter="concurrency"]').value
   };
 }
 function matchesFilters(element, filters) {
-  return (!filters.region || element.dataset.region === filters.region)
+  return (!filters.family || element.dataset.family === filters.family)
+    && (!filters.region || element.dataset.region === filters.region)
     && (!filters.model || element.dataset.model === filters.model)
     && (!filters.concurrency || element.dataset.concurrency === filters.concurrency);
+}
+function activateTab(button) {
+  const target = button.dataset.tabTarget;
+  document.querySelectorAll('.tab-button').forEach((item) => {
+    item.classList.toggle('active', item === button);
+  });
+  document.querySelectorAll('.tab-panel').forEach((panel) => {
+    panel.classList.toggle('hidden', panel.id !== target);
+  });
 }
 function applyFilters() {
   const filters = selectedFilters();
@@ -1480,6 +1840,9 @@ const sortControl = document.getElementById('case-sort');
 if (sortControl) {
   sortControl.addEventListener('change', sortCaseRows);
 }
+document.querySelectorAll('.tab-button').forEach((button) => {
+  button.addEventListener('click', () => activateTab(button));
+});
 sortCaseRows();
 applyFilters();
 """
@@ -1493,16 +1856,18 @@ def render_html(reports: list[dict], suite_summaries: list[dict] | None = None) 
     workload_rows = aggregate_case_metrics(workload_reports)
     failures = collect_failures(reports)
     failure_summary = collect_failure_summary(failures)
+    skipped_rows = collect_skipped_combinations(reports)
     filter_options = collect_filter_options(case_rows)
     overall = collect_overall_metrics(reports, case_rows)
 
     cards = [
-        ("JSON reports", str(overall["reports"]), "Loaded benchmark result sets"),
-        ("Success rate", format_percent(overall["success_rate"]), f"{overall['successes']}/{overall['attempts']} successful requests"),
-        ("Avg latency", format_latency(overall["avg_latency"]), "Average successful end-to-end response time"),
-        ("P95 latency", format_latency(overall["p95_latency"]), "95% of successful requests finished under this time"),
-        ("Avg tok/sec", format_number(overall["avg_tokens_per_second"]), "Average output tokens per second"),
-        ("Avg tokens", format_number(overall["avg_tokens"]), "Average total tokens per successful request"),
+        ("JSON reports", str(overall["reports"]), "dashboard에 로드된 benchmark result set 수"),
+        ("Success rate", format_percent(overall["success_rate"]), f"{overall['successes']}/{overall['attempts']} 요청 성공"),
+        ("Avg latency", format_latency(overall["avg_latency"]), "성공 요청의 평균 end-to-end 응답 시간"),
+        ("P95 latency", format_latency(overall["p95_latency"]), "성공 요청 중 95%가 이 시간 안에 완료됨"),
+        ("Avg tok/sec", format_number(overall["avg_tokens_per_second"]), "초당 평균 output token 수"),
+        ("Avg TTFT", format_latency(overall["avg_ttft"]), "streaming run에서 첫 토큰까지 걸린 평균 시간"),
+        ("Avg tokens", format_number(overall["avg_tokens"]), "성공 요청당 평균 total token 수"),
     ]
     card_html = "".join(
         "<div class='card'>"
@@ -1524,21 +1889,25 @@ def render_html(reports: list[dict], suite_summaries: list[dict] | None = None) 
 </head>
 <body>
   <div class="page">
-    <h1>GenAI Benchmark Dashboard</h1>
-    <p class="lede">Generated from current JSON results in <code>runs/</code>. This view is static and self-contained, so you can open it directly in a browser.</p>
+    {title_html(1, 'GenAI Benchmark Dashboard', 'runs/ 디렉터리의 benchmark JSON report를 모아 성능, 부하 민감도, 실패, skip 조합을 보여주는 정적 dashboard입니다.')}
+    <p class="lede">현재 <code>runs/</code> JSON 결과에서 생성한 정적 dashboard입니다. 브라우저에서 바로 열어 볼 수 있습니다.</p>
     <div class="cards">{card_html}</div>
+    {render_load_summary(case_rows)}
+    {render_c50_ranking(case_rows)}
+    {render_load_sensitivity(case_rows)}
     {render_runner_matrix(suite_summaries, reports)}
+    {render_skipped_table(skipped_rows)}
     {render_workload_details(workload_rows, workload_reports)}
     {render_filter_controls(filter_options)}
     <div class="section">
-      <h2>Latency vs Token Volume</h2>
-      <p class="muted">Use this to see whether a response was slow because it generated more tokens, or because it was slower than peers with a similar token count.</p>
+      {title_html(2, 'Latency vs Token Volume', '응답이 token을 많이 생성해서 느린 것인지, 비슷한 token 수에서도 상대적으로 느린 것인지 확인합니다.')}
+      <p class="muted">응답이 느린 이유가 생성 token 수 때문인지, 같은 token 규모의 다른 결과보다 느린 것인지 비교합니다.</p>
     </div>
     <div class="chart-grid">
       {render_scatter(case_rows, 'Latency vs Generated Tokens')}
       <div class='panel'>
-        <h2>How to Read</h2>
-        <p class="muted">Points farther right produced more tokens. Points higher took longer. If two points have a similar token count, the higher point is relatively slower.</p>
+        {title_html(2, 'How to Read', 'scatter plot의 위치를 해석하는 방법입니다. 오른쪽은 token 수가 많고, 위쪽은 latency가 긴 결과입니다.')}
+        <p class="muted">오른쪽에 있을수록 더 많은 token을 생성했고, 위쪽에 있을수록 더 오래 걸렸습니다. token 수가 비슷한 두 점에서는 더 위에 있는 점이 상대적으로 느린 결과입니다.</p>
       </div>
     </div>
     {render_raw_debug_details(reports, case_rows, family_rows, failure_summary, failures)}

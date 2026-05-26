@@ -36,14 +36,19 @@
     "eu-frankfurt-1"
   ],
   "benchmark": {
-    "suite_name": "global-chat-nl2sql-r1",
+    "suite_name": "global-chat-nl2sql-load-multimodel-streaming-r1",
     "repeats": 1,
-    "concurrency_levels": "1",
+    "concurrency_levels": "1,10,50",
     "prompts": "prompts/chat_nl2sql_workloads.jsonl",
-    "report_suffix": "global-chat-nl2sql-r1",
+    "report_suffix": "global-chat-nl2sql-load-multimodel-streaming-r1",
+    "streaming": true,
+    "include_experimental": true,
     "families": [
       "openai",
-      "gemini"
+      "gemini",
+      "grok",
+      "meta",
+      "cohere"
     ],
     "extra_args": []
   },

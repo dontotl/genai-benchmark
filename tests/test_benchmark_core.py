@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import genai_benchmark.runner as runner_module
 from genai_benchmark.cli import parse_concurrency_levels
-from genai_benchmark.catalog import ModelSpec
+from genai_benchmark.catalog import ModelSpec, get_family_names, resolve_models
 from genai_benchmark.dashboard import load_reports, load_suite_summaries, render_html
 from genai_benchmark.runner import (
     RunResult,
@@ -72,6 +72,37 @@ class ConcurrencyLevelsTest(unittest.TestCase):
             parse_concurrency_levels("1,zero", 1)
         with self.assertRaises(SystemExit):
             parse_concurrency_levels("1,0", 1)
+
+
+class CatalogSelectionTest(unittest.TestCase):
+    def test_catalog_lists_new_multimodel_families(self) -> None:
+        families = get_family_names()
+
+        self.assertIn("cohere", families)
+        self.assertIn("grok", families)
+        self.assertIn("meta", families)
+
+    def test_include_experimental_selects_representative_models(self) -> None:
+        models = resolve_models(
+            ["openai", "gemini", "grok", "meta", "cohere"],
+            None,
+            include_experimental=True,
+        )
+
+        self.assertEqual(
+            [model.model_id for model in models],
+            [
+                "openai.gpt-oss-20b",
+                "google.gemini-2.5-flash",
+                "xai.grok-4.3",
+                "meta.llama-4-scout-17b-16e-instruct",
+                "cohere.command-a-03-2025",
+            ],
+        )
+
+    def test_experimental_defaults_are_excluded_without_flag(self) -> None:
+        with self.assertRaises(SystemExit):
+            resolve_models(["grok", "meta", "cohere"], None, include_experimental=False)
 
 
 class AggregateResultsTest(unittest.TestCase):
@@ -355,7 +386,8 @@ class DashboardCompatibilityTest(unittest.TestCase):
 
         self.assertIn("Region-to-Region Performance: global-smoke-r1", html)
         self.assertIn("Runner Summary", html)
-        self.assertIn("adds metrics from each runner JSON report", html)
+        self.assertIn("각 runner JSON report의 P95", html)
+        self.assertIn("info-tooltip", html)
         self.assertIn("Tok/sec 50.0", html)
         self.assertIn("TTFT -", html)
         self.assertIn("source best", html)
@@ -472,6 +504,7 @@ class DashboardCompatibilityTest(unittest.TestCase):
         self.assertIn("Raw Data / Debug Details", html)
         self.assertIn("<summary>Raw Data / Debug Details</summary>", html)
         self.assertIn("Latency vs Token Volume", html)
+        self.assertIn("마우스를 올리면", html)
         self.assertNotIn("Efficiency View", html)
 
     def test_dashboard_renders_failure_summary(self) -> None:
@@ -502,6 +535,64 @@ class DashboardCompatibilityTest(unittest.TestCase):
         self.assertIn("Failure Summary", html)
         self.assertIn("HTTPStatusError", html)
         self.assertIn("opc-123", html)
+
+    def test_dashboard_renders_multimodel_load_controls_and_skips(self) -> None:
+        summary_rows = []
+        for family, model in (
+            ("grok", "xai.grok-4.3"),
+            ("meta", "meta.llama-4-scout-17b-16e-instruct"),
+            ("cohere", "cohere.command-a-03-2025"),
+        ):
+            for concurrency, latency, ttft in ((1, 1.0, 0.2), (10, 2.0, 0.4), (50, 5.0, 0.8)):
+                summary_rows.append(
+                    {
+                        "region": "us-chicago-1",
+                        "model": model,
+                        "family": family,
+                        "case_id": "chat-helpdesk",
+                        "concurrency": concurrency,
+                        "streaming": True,
+                        "attempts": 1,
+                        "successes": 1,
+                        "failures": 0,
+                        "avg_latency_seconds": latency,
+                        "p95_latency_seconds": latency,
+                        "p99_latency_seconds": latency,
+                        "avg_ttft_seconds": ttft,
+                        "avg_total_tokens": 100.0,
+                        "avg_output_tokens_per_second": 25.0,
+                        "avg_post_ttft_output_tokens_per_second": 30.0,
+                    }
+                )
+        payload = {
+            "benchmark_config": {"streaming": True, "concurrency_levels": [1, 10, 50]},
+            "summary": summary_rows,
+            "results": [],
+            "skipped": [
+                {
+                    "region": "eu-frankfurt-1",
+                    "family": "cohere",
+                    "model": "cohere.command-a-03-2025",
+                    "reason": "Model is not cataloged for on-demand access in region eu-frankfurt-1.",
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            Path(tmp_dir, "load.json").write_text(json.dumps(payload), encoding="utf-8")
+            html = render_html(load_reports(Path(tmp_dir)))
+
+        self.assertIn("Load Summary", html)
+        self.assertIn("C50/C1 latency multiplier", html)
+        self.assertIn("C50 Ranking", html)
+        self.assertIn("Load Sensitivity", html)
+        self.assertIn("Avg TTFT", html)
+        self.assertIn("family-filter", html)
+        self.assertIn("legend-dot cohere", html)
+        self.assertIn("pill grok", html)
+        self.assertIn("pill meta", html)
+        self.assertIn("pill cohere", html)
+        self.assertIn("지원 리전 아님", html)
 
     def test_dashboard_skips_non_report_json_files(self) -> None:
         report_payload = {"summary": [], "results": []}

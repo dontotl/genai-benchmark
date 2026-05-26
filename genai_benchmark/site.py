@@ -125,8 +125,20 @@ def render_preview_svg(report: dict, focus: dict) -> str:
         '<text x="650" y="309" fill="#4d463f" font-size="18" font-weight="700" font-family="Arial, sans-serif">Rate</text>',
         '<text x="820" y="309" fill="#4d463f" font-size="18" font-weight="700" font-family="Arial, sans-serif">Avg Latency</text>',
     ]
-    family_fill = {"openai": "#ccfbf1", "gemini": "#fef3c7", "grok": "#dbeafe", "meta": "#ede9fe"}
-    family_text = {"openai": "#115e59", "gemini": "#92400e", "grok": "#1d4ed8", "meta": "#6d28d9"}
+    family_fill = {
+        "openai": "#ccfbf1",
+        "gemini": "#fef3c7",
+        "grok": "#dbeafe",
+        "meta": "#ede9fe",
+        "cohere": "#ffe4e6",
+    }
+    family_text = {
+        "openai": "#115e59",
+        "gemini": "#92400e",
+        "grok": "#1d4ed8",
+        "meta": "#6d28d9",
+        "cohere": "#be123c",
+    }
 
     for index, row in enumerate(focus["rows"]):
         y = row_y_start + index * row_height
@@ -136,8 +148,8 @@ def render_preview_svg(report: dict, focus: dict) -> str:
             <g>
               <rect x="56" y="{y}" width="1088" height="46" rx="12" fill="#fffdf9" stroke="#e5ddcf"/>
               <text x="76" y="{y + 29}" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">{escape(row['region'])}</text>
-              <rect x="292" y="{y + 9}" width="98" height="28" rx="14" fill="{family_fill[row['family']]}"/>
-              <text x="341" y="{y + 28}" text-anchor="middle" fill="{family_text[row['family']]}" font-size="15" font-weight="700" font-family="Arial, sans-serif">{escape(row['family'])}</text>
+              <rect x="292" y="{y + 9}" width="98" height="28" rx="14" fill="{family_fill.get(row['family'], '#f3eee6')}"/>
+              <text x="341" y="{y + 28}" text-anchor="middle" fill="{family_text.get(row['family'], '#4d463f')}" font-size="15" font-weight="700" font-family="Arial, sans-serif">{escape(row['family'])}</text>
               <text x="460" y="{y + 29}" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">{row['successes']}/{row['attempts']}</text>
               <text x="650" y="{y + 29}" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">{row['success_rate']:.1f}%</text>
               <text x="820" y="{y + 29}" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">{escape(latency)}</text>

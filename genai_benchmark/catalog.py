@@ -52,7 +52,6 @@ CATALOG: tuple[ModelSpec, ...] = (
         family="grok",
         label="xAI Grok 3",
         regions=("us-ashburn-1", "us-chicago-1", "us-phoenix-1"),
-        default_selected=True,
         experimental=True,
     ),
     ModelSpec(
@@ -70,11 +69,18 @@ CATALOG: tuple[ModelSpec, ...] = (
         experimental=True,
     ),
     ModelSpec(
+        model_id="xai.grok-4.3",
+        family="grok",
+        label="xAI Grok 4.3",
+        regions=("us-ashburn-1", "us-chicago-1", "us-phoenix-1"),
+        default_selected=True,
+        experimental=True,
+    ),
+    ModelSpec(
         model_id="meta.llama-3.3-70b-instruct",
         family="meta",
         label="Meta Llama 3.3 70B",
         regions=("ap-osaka-1", "us-chicago-1"),
-        default_selected=True,
         experimental=True,
     ),
     ModelSpec(
@@ -89,6 +95,22 @@ CATALOG: tuple[ModelSpec, ...] = (
         family="meta",
         label="Meta Llama 3.2 90B Vision",
         regions=("ap-osaka-1", "us-chicago-1"),
+        experimental=True,
+    ),
+    ModelSpec(
+        model_id="meta.llama-4-scout-17b-16e-instruct",
+        family="meta",
+        label="Meta Llama 4 Scout 17B 16E Instruct",
+        regions=("ap-osaka-1", "us-chicago-1"),
+        default_selected=True,
+        experimental=True,
+    ),
+    ModelSpec(
+        model_id="cohere.command-a-03-2025",
+        family="cohere",
+        label="Cohere Command A 03-2025",
+        regions=("us-chicago-1",),
+        default_selected=True,
         experimental=True,
     ),
 )
