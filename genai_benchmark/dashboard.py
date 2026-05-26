@@ -42,6 +42,7 @@ def load_reports(runs_dir: Path) -> list[dict]:
                 "results": data.get("results", []),
                 "selected_models": data.get("selected_models", []),
                 "skipped": data.get("skipped", []),
+                "benchmark_config": data.get("benchmark_config", {}),
                 "generated_at": data.get("generated_at", ""),
             }
         )
@@ -557,11 +558,98 @@ a:hover { text-decoration: underline; }
   font-size: 13px;
   margin-top: 4px;
 }
+.context-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 18px;
+  margin-top: 18px;
+}
+.context-list {
+  margin: 0;
+  padding-left: 18px;
+}
+.context-list li {
+  margin: 8px 0;
+}
+.workload-grid {
+  display: grid;
+  gap: 10px;
+}
+.workload-item {
+  background: #fffaf2;
+  border: 1px solid #e5ddcf;
+  border-radius: 8px;
+  padding: 12px;
+}
+.workload-item strong {
+  display: block;
+  margin-bottom: 5px;
+}
+.workload-detail {
+  overflow-x: auto;
+}
+.workload-detail h3 {
+  margin: 0 0 8px;
+}
+.workload-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  color: #4d463f;
+  font-size: 13px;
+  margin: 10px 0 14px;
+}
+details {
+  margin-top: 12px;
+}
+summary {
+  cursor: pointer;
+  color: #4d463f;
+  font-weight: 700;
+}
+.prompt-block {
+  margin-top: 10px;
+}
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f3eee6;
+  border-radius: 8px;
+  padding: 10px;
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
 @media (max-width: 900px) {
   .chart-grid { grid-template-columns: 1fr; }
   .matrix-grid { grid-template-columns: 1fr; }
+  .context-grid { grid-template-columns: 1fr; }
 }
 """
+
+
+WORKLOAD_DESCRIPTIONS = {
+    "summary-ko": "긴 내용을 한국어로 짧게 요약하게 하는 테스트입니다. 사용자가 빠르게 핵심만 읽을 수 있는 답을 만드는 속도를 봅니다.",
+    "table-en": "작은 모델과 큰 모델의 장단점을 영어 표로 정리하게 하는 테스트입니다. 단순 문장뿐 아니라 표처럼 구조가 있는 답을 만드는 속도를 봅니다.",
+    "ops-checklist": "운영자가 점검표를 만들듯 확인 항목을 한국어 목록으로 정리하게 하는 테스트입니다. 여러 항목을 빠짐없이 정리하는 속도를 봅니다.",
+    "chat-helpdesk": "사용자 문의에 상담원처럼 답하게 하는 테스트입니다. 원인 후보와 먼저 확인할 일을 쉽게 정리하는 속도를 봅니다.",
+    "code-debug": "짧은 코드의 문제를 찾고 수정 방향을 설명하게 하는 테스트입니다. 코드 이해와 실용적인 설명 속도를 봅니다.",
+    "reasoning-choice": "여러 조건을 비교해서 더 나은 선택을 고르게 하는 테스트입니다. 간단한 판단과 근거 설명 속도를 봅니다.",
+    "agentic-plan": "실제 도구를 실행하지 않고 작업 순서와 확인 항목을 계획하게 하는 테스트입니다. 실행 전 계획 수립 능력과 속도를 봅니다.",
+    "nl2sql-sales-analytics": "사람이 말로 한 매출 분석 질문을 SQL SELECT query로 바꾸게 하는 테스트입니다. 실제 DB 실행 없이 SQL을 만드는 속도를 봅니다.",
+}
+
+
+WORKLOAD_DETAILS = {
+    "summary-ko": ("Summarization", "짧은 한국어 요약"),
+    "table-en": ("Structured writing", "영어 markdown table"),
+    "ops-checklist": ("Operational checklist", "한국어 점검 목록"),
+    "chat-helpdesk": ("Chat / support", "원인 후보와 다음 확인 단계"),
+    "code-debug": ("Code reasoning", "버그 설명과 수정 방향"),
+    "reasoning-choice": ("Reasoning", "선택지와 짧은 근거"),
+    "agentic-plan": ("Agentic planning", "실행 전 작업 순서와 확인 항목"),
+    "nl2sql-sales-analytics": ("NL2SQL", "안전한 SELECT SQL query"),
+}
 
 
 def latest_suite_summary(summaries: list[dict]) -> dict | None:
@@ -570,10 +658,49 @@ def latest_suite_summary(summaries: list[dict]) -> dict | None:
     return max(summaries, key=lambda item: (item.get("generated_at") or "", item["name"]))
 
 
+def average(values: list[float]) -> float | None:
+    return (sum(values) / len(values)) if values else None
+
+
+def percentile_value(values: list[float], pct: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = (len(ordered) - 1) * (pct / 100.0)
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = rank - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
 def format_latency(value: float | None) -> str:
     if value is None:
         return "-"
     return f"{value:.3f}s"
+
+
+def format_number(value: float | None, digits: int = 1) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.{digits}f}"
+
+
+def format_percent(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.1f}%"
+
+
+def latency_grade(value: float | None) -> str:
+    if value is None:
+        return "No data"
+    if value < 2.0:
+        return "Good"
+    if value < 4.0:
+        return "Watch"
+    return "Slow"
 
 
 def heat_color(value: float | None, minimum: float, maximum: float) -> str:
@@ -594,7 +721,248 @@ def heat_color(value: float | None, minimum: float, maximum: float) -> str:
     return f"rgb({rgb[0]}, {rgb[1]}, {rgb[2]})"
 
 
-def render_runner_matrix(summaries: list[dict]) -> str:
+def suite_reports(summary: dict, reports: list[dict]) -> list[dict]:
+    report_names = {
+        Path(row["json"]).stem
+        for row in summary.get("sources", [])
+        if row.get("json")
+    }
+    selected = [report for report in reports if report["name"] in report_names]
+    return selected or reports
+
+
+def focus_reports(summaries: list[dict], reports: list[dict]) -> list[dict]:
+    summary = latest_suite_summary(summaries)
+    return suite_reports(summary, reports) if summary else reports
+
+
+def format_config_value(value: object) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value) or "-"
+    return str(value)
+
+
+def report_source_label(report: dict) -> str:
+    return report.get("benchmark_config", {}).get("source_label") or report["name"]
+
+
+def render_runner_context(summary: dict, reports: list[dict]) -> str:
+    selected_reports = suite_reports(summary, reports)
+    model_labels = sorted(
+        {
+            model.get("label") or model.get("model_id") or ""
+            for report in selected_reports
+            for model in report.get("selected_models", [])
+            if model.get("label") or model.get("model_id")
+        }
+    )
+    case_ids = sorted(
+        {
+            item.get("case_id") or ""
+            for report in selected_reports
+            for item in report.get("summary", [])
+            if item.get("case_id")
+        }
+    )
+    config = next((report.get("benchmark_config", {}) for report in selected_reports if report.get("benchmark_config")), {})
+    repeats = config.get("repeats", "-")
+    concurrency = format_config_value(config.get("concurrency_levels"))
+    streaming = "-" if "streaming" not in config else ("yes" if config.get("streaming") else "no")
+    temperature = config.get("temperature", "-")
+    max_tokens = config.get("max_tokens", "-")
+
+    model_items = "".join(f"<li><code>{escape(label)}</code></li>" for label in model_labels) or "<li>-</li>"
+    return (
+        "<div class='section'>"
+        "<div class='panel'>"
+        "<h2>Test Context</h2>"
+        "<p class='muted'>This suite sends the same workload set from each source runner to each target region, then compares latency, throughput, and success rate.</p>"
+        "<ul class='context-list'>"
+        f"<li>Models tested:<ul>{model_items}</ul></li>"
+        f"<li>Workloads tested: <code>{escape(', '.join(case_ids) if case_ids else '-')}</code></li>"
+        f"<li>Execution: repeats <code>{escape(str(repeats))}</code>, concurrency <code>{escape(concurrency)}</code>, streaming <code>{streaming}</code></li>"
+        f"<li>Generation settings: temperature <code>{escape(str(temperature))}</code>, max tokens <code>{escape(str(max_tokens))}</code></li>"
+        "<li>Interpretation: lower latency and higher output tokens/sec are better. This is a smoke benchmark, not a full quality or load test.</li>"
+        "</ul>"
+        "</div></div>"
+    )
+
+
+def metric_row_from_values(values: list[dict]) -> dict:
+    attempts = sum(item["attempts"] for item in values)
+    successes = sum(item["successes"] for item in values)
+    latency_values = [item["avg_latency"] for item in values if item.get("avg_latency") is not None]
+    p95_values = [item["p95_latency"] for item in values if item.get("p95_latency") is not None]
+    ttft_values = [item["avg_ttft"] for item in values if item.get("avg_ttft") is not None]
+    token_values = [item["avg_tokens"] for item in values if item.get("avg_tokens") is not None]
+    throughput_values = [
+        item["avg_tokens_per_second"]
+        for item in values
+        if item.get("avg_tokens_per_second") is not None
+    ]
+    return {
+        "attempts": attempts,
+        "successes": successes,
+        "failures": sum(item["failures"] for item in values),
+        "success_rate": (successes / attempts * 100) if attempts else None,
+        "avg_latency": average(latency_values),
+        "p95_latency": average(p95_values),
+        "avg_ttft": average(ttft_values),
+        "avg_tokens": average(token_values),
+        "avg_tokens_per_second": average(throughput_values),
+    }
+
+
+def source_target_metrics(summary: dict, reports: list[dict]) -> dict[tuple[str, str], dict]:
+    selected_reports = suite_reports(summary, reports)
+    source_by_report = {
+        Path(row["json"]).stem: row["source"]
+        for row in summary.get("sources", [])
+        if row.get("json")
+    }
+    rows_by_source_target: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for report in selected_reports:
+        source = source_by_report.get(report["name"]) or report_source_label(report)
+        for item in aggregate_case_metrics([report]):
+            rows_by_source_target[(source, item["region"])].append(item)
+    return {
+        key: metric_row_from_values(values)
+        for key, values in rows_by_source_target.items()
+    }
+
+
+def prompt_paths_from_reports(reports: list[dict]) -> list[Path]:
+    paths = []
+    for report in reports:
+        prompt_path = report.get("benchmark_config", {}).get("prompts")
+        if not prompt_path:
+            continue
+        path = Path(prompt_path)
+        paths.append(path if path.is_absolute() else PROJECT_ROOT / path)
+    default_path = PROJECT_ROOT / "prompts" / "chat_nl2sql_workloads.jsonl"
+    paths.append(default_path)
+    unique = []
+    seen = set()
+    for path in paths:
+        if path not in seen:
+            seen.add(path)
+            unique.append(path)
+    return unique
+
+
+def load_workload_prompts(reports: list[dict]) -> dict[str, list[dict[str, str]]]:
+    workloads = {}
+    for path in prompt_paths_from_reports(reports):
+        if not path.exists():
+            continue
+        for lineno, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            case_id = payload.get("id") or f"case-{lineno}"
+            if "messages" in payload and isinstance(payload["messages"], list):
+                workloads[case_id] = [
+                    {
+                        "role": str(message.get("role", "user")),
+                        "content": str(message.get("content", "")),
+                    }
+                    for message in payload["messages"]
+                    if isinstance(message, dict)
+                ]
+            elif "prompt" in payload:
+                workloads[case_id] = [{"role": "user", "content": str(payload["prompt"])}]
+    return workloads
+
+
+def render_prompt_messages(messages: list[dict[str, str]]) -> str:
+    if not messages:
+        return "<p class='muted'>Prompt source was not found for this workload.</p>"
+    blocks = []
+    for message in messages:
+        blocks.append(
+            "<div class='prompt-block'>"
+            f"<div class='muted'><code>{escape(message['role'])}</code></div>"
+            f"<pre>{escape(message['content'])}</pre>"
+            "</div>"
+        )
+    return "".join(blocks)
+
+
+def render_workload_metric_table(rows: list[dict]) -> str:
+    if not rows:
+        return "<p class='muted'>No measured rows found for this workload.</p>"
+    body = []
+    for row in rows:
+        body.append(
+            "<tr>"
+            f"<td><code>{escape(row['report'])}</code></td>"
+            f"<td><code>{escape(row['region'])}</code></td>"
+            f"<td><span class='pill {escape(row['family'])}'>{escape(row['family'])}</span></td>"
+            f"<td><code>{escape(row['model'])}</code></td>"
+            f"<td>{row['successes']}/{row['attempts']} ({row['success_rate']:.1f}%)</td>"
+            f"<td>{escape(format_latency(row['avg_latency']))}</td>"
+            f"<td>{escape(format_latency(row['p95_latency']))}</td>"
+            f"<td>{escape(format_latency(row['p99_latency']))}</td>"
+            f"<td>{escape(format_number(row['avg_tokens']))}</td>"
+            f"<td>{escape(format_number(row['avg_tokens_per_second']))}</td>"
+            f"<td>{escape(format_latency(row['avg_ttft']))}</td>"
+            "</tr>"
+        )
+    return (
+        "<table><thead><tr>"
+        "<th>Report</th><th>Region</th><th>Family</th><th>Model</th><th>Success</th>"
+        "<th>Avg Latency</th><th>P95</th><th>P99</th><th>Avg Tokens</th><th>Tok/sec</th><th>TTFT</th>"
+        "</tr></thead><tbody>"
+        + "".join(body)
+        + "</tbody></table>"
+    )
+
+
+def render_workload_details(case_rows: list[dict], reports: list[dict]) -> str:
+    if not case_rows:
+        return ""
+    prompts = load_workload_prompts(reports)
+    case_ids = sorted({row["case_id"] for row in case_rows})
+    cards = []
+    for case_id in case_ids:
+        kind, expected = WORKLOAD_DETAILS.get(case_id, ("Benchmark workload", "모델 응답"))
+        description = WORKLOAD_DESCRIPTIONS.get(
+            case_id,
+            "이 workload는 같은 입력을 여러 모델과 리전에 보내 응답 속도와 처리량을 비교하는 테스트입니다.",
+        )
+        rows = [row for row in case_rows if row["case_id"] == case_id]
+        cards.append(
+            "<div class='workload-item workload-detail'>"
+            f"<h3><code>{escape(case_id)}</code></h3>"
+            f"<p class='muted'>{escape(description)}</p>"
+            "<div class='workload-meta'>"
+            f"<span>Type: <code>{escape(kind)}</code></span>"
+            f"<span>Expected output: {escape(expected)}</span>"
+            "</div>"
+            f"{render_workload_metric_table(rows)}"
+            "<details>"
+            "<summary>Prompt 원문 보기</summary>"
+            f"{render_prompt_messages(prompts.get(case_id, []))}"
+            "</details>"
+            "</div>"
+        )
+    return (
+        "<div class='section'>"
+        "<h2>Workload Details</h2>"
+        "<p class='muted'>각 테스트 케이스가 무엇을 시키는지와, workload별 latency/token/sec/TTFT 결과를 함께 보여줍니다.</p>"
+        "<div class='workload-grid'>"
+        f"{''.join(cards)}"
+        "</div></div>"
+    )
+
+
+def render_runner_matrix(summaries: list[dict], reports: list[dict]) -> str:
     summary = latest_suite_summary(summaries)
     if not summary:
         return ""
@@ -605,6 +973,7 @@ def render_runner_matrix(summaries: list[dict]) -> str:
         (row["source"], row["target_region"]): row["avg_latency"]
         for row in summary["target_latency"]
     }
+    metrics_by_pair = source_target_metrics(summary, reports)
     latencies = [value for value in latency_by_pair.values() if value is not None]
     minimum = min(latencies) if latencies else 0.0
     maximum = max(latencies) if latencies else 0.0
@@ -644,11 +1013,16 @@ def render_runner_matrix(summaries: list[dict]) -> str:
             if target_best.get(target, (None, None))[0] == source:
                 labels.append("target best")
             note = ", ".join(labels) if labels else "avg latency"
+            metrics = metrics_by_pair.get((source, target), {})
             cells.append(
                 "<div class='heat-cell' "
                 f"style='background:{heat_color(latency, minimum, maximum)}'>"
                 f"<div class='heat-value'>{escape(format_latency(latency))}</div>"
-                f"<div class='heat-note'>{escape(note)}</div>"
+                f"<div class='heat-note'>{escape(note)} · {escape(latency_grade(latency))}</div>"
+                f"<div class='heat-note'>P95 {escape(format_latency(metrics.get('p95_latency')))}</div>"
+                f"<div class='heat-note'>Tok/sec {escape(format_number(metrics.get('avg_tokens_per_second')))}</div>"
+                f"<div class='heat-note'>Success {escape(format_percent(metrics.get('success_rate')))}</div>"
+                f"<div class='heat-note'>TTFT {escape(format_latency(metrics.get('avg_ttft')))}</div>"
                 "</div>"
             )
     cells.append("</div>")
@@ -678,12 +1052,16 @@ def render_runner_matrix(summaries: list[dict]) -> str:
 
     return (
         "<div class='section'>"
-        f"<h2>Runner Matrix: {escape(summary['name'])}</h2>"
-        "<p class='muted'>Uses the existing suite summary values. Lower latency is better; highlighted notes mark each source or target winner.</p>"
+        f"<h2>Region-to-Region Performance: {escape(summary['name'])}</h2>"
+        "<p class='muted'>This heatmap keeps the existing suite latency values and adds metrics from each runner JSON report. Lower latency and higher output tokens/sec are better.</p>"
         "<div class='matrix-grid'>"
         f"<div class='panel'>{''.join(cells)}</div>"
-        f"<div class='panel'><h2>Runner Ranking</h2>{''.join(tiles)}</div>"
-        "</div></div>"
+        "<div class='panel'><h2>Metric Guide</h2>"
+        "<p class='muted'>Latency grade: Good &lt; 2s, Watch 2-4s, Slow >= 4s. TTFT is only available when the run captured first-token timing; otherwise it is shown as '-'.</p>"
+        f"<h2>Runner Summary</h2><p class='muted'>Each tile summarizes one source runner: its overall average latency, fastest target, slowest target, and success rate.</p>{''.join(tiles)}</div>"
+        "</div>"
+        f"{render_runner_context(summary, reports)}"
+        "</div>"
     )
 
 
@@ -971,6 +1349,40 @@ def render_filter_controls(options: dict[str, list[str]]) -> str:
     )
 
 
+def collect_overall_metrics(reports: list[dict], case_rows: list[dict]) -> dict[str, float | int | None]:
+    latencies = []
+    throughputs = []
+    tokens = []
+    ttfts = []
+    for report in reports:
+        for item in report["results"]:
+            if item.get("error"):
+                continue
+            if isinstance(item.get("latency_seconds"), (int, float)):
+                latencies.append(float(item["latency_seconds"]))
+            if isinstance(item.get("output_tokens_per_second"), (int, float)):
+                throughputs.append(float(item["output_tokens_per_second"]))
+            if isinstance(item.get("total_tokens"), (int, float)):
+                tokens.append(float(item["total_tokens"]))
+            if isinstance(item.get("ttft_seconds"), (int, float)):
+                ttfts.append(float(item["ttft_seconds"]))
+    total_attempts = sum(row["attempts"] for row in case_rows)
+    total_successes = sum(row["successes"] for row in case_rows)
+    total_failures = sum(row["failures"] for row in case_rows)
+    return {
+        "reports": len(reports),
+        "attempts": total_attempts,
+        "successes": total_successes,
+        "failures": total_failures,
+        "success_rate": (total_successes / total_attempts * 100) if total_attempts else 0.0,
+        "avg_latency": average(latencies),
+        "p95_latency": percentile_value(latencies, 95),
+        "avg_tokens_per_second": average(throughputs),
+        "avg_tokens": average(tokens),
+        "avg_ttft": average(ttfts),
+    }
+
+
 def javascript() -> str:
     return """
 function selectedFilters() {
@@ -1028,19 +1440,20 @@ def render_html(reports: list[dict], suite_summaries: list[dict] | None = None) 
     suite_summaries = suite_summaries or []
     family_rows = aggregate_family_metrics(reports)
     case_rows = aggregate_case_metrics(reports)
+    workload_reports = focus_reports(suite_summaries, reports)
+    workload_rows = aggregate_case_metrics(workload_reports)
     failures = collect_failures(reports)
     failure_summary = collect_failure_summary(failures)
     filter_options = collect_filter_options(case_rows)
-    total_attempts = sum(row["attempts"] for row in family_rows)
-    total_successes = sum(row["successes"] for row in family_rows)
-    total_failures = sum(row["failures"] for row in family_rows)
-    success_rate = (total_successes / total_attempts * 100) if total_attempts else 0.0
+    overall = collect_overall_metrics(reports, case_rows)
 
     cards = [
-        ("JSON reports", str(len(reports)), "Loaded benchmark result sets"),
-        ("Total attempts", str(total_attempts), "Across all current report files"),
-        ("Total successes", str(total_successes), f"Overall success rate {success_rate:.1f}%"),
-        ("Total failures", str(total_failures), "Failures are broken out below"),
+        ("JSON reports", str(overall["reports"]), "Loaded benchmark result sets"),
+        ("Success rate", format_percent(overall["success_rate"]), f"{overall['successes']}/{overall['attempts']} successful requests"),
+        ("Avg latency", format_latency(overall["avg_latency"]), "Average successful end-to-end response time"),
+        ("P95 latency", format_latency(overall["p95_latency"]), "95% of successful requests finished under this time"),
+        ("Avg tok/sec", format_number(overall["avg_tokens_per_second"]), "Average output tokens per second"),
+        ("Avg tokens", format_number(overall["avg_tokens"]), "Average total tokens per successful request"),
     ]
     card_html = "".join(
         "<div class='card'>"
@@ -1065,8 +1478,9 @@ def render_html(reports: list[dict], suite_summaries: list[dict] | None = None) 
     <h1>GenAI Benchmark Dashboard</h1>
     <p class="lede">Generated from current JSON results in <code>runs/</code>. This view is static and self-contained, so you can open it directly in a browser.</p>
     <div class="cards">{card_html}</div>
+    {render_runner_matrix(suite_summaries, reports)}
+    {render_workload_details(workload_rows, workload_reports)}
     {render_filter_controls(filter_options)}
-    {render_runner_matrix(suite_summaries)}
     <div class="chart-grid">
       {render_bars(family_rows, 'success_rate', 'Success Rate by Report / Family', '%')}
       {render_bars(family_rows, 'avg_latency', 'Average Latency by Report / Family', 's')}

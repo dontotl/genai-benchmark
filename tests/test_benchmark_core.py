@@ -16,6 +16,7 @@ from genai_benchmark.runner import (
     aggregate_results,
     extract_failure_details,
     invoke_streaming,
+    load_cases,
     make_thread_local_llm_factory,
 )
 from genai_benchmark.site import choose_focus_report
@@ -188,6 +189,28 @@ class FailureDetailsTest(unittest.TestCase):
         self.assertEqual(details["request_id"], "opc-123")
 
 
+class WorkloadPromptTest(unittest.TestCase):
+    def test_chat_nl2sql_workload_file_loads_expected_cases(self) -> None:
+        cases = load_cases(Path("prompts/chat_nl2sql_workloads.jsonl"))
+        by_id = {case.case_id: case for case in cases}
+
+        self.assertEqual(
+            set(by_id),
+            {
+                "chat-helpdesk",
+                "summary-ko",
+                "code-debug",
+                "reasoning-choice",
+                "agentic-plan",
+                "nl2sql-sales-analytics",
+            },
+        )
+        nl2sql_messages = " ".join(message["content"] for message in by_id["nl2sql-sales-analytics"].messages)
+        self.assertIn("customers", nl2sql_messages)
+        self.assertIn("SELECT", nl2sql_messages)
+        self.assertIn("Question:", nl2sql_messages)
+
+
 class DashboardCompatibilityTest(unittest.TestCase):
     def test_dashboard_reads_legacy_json_without_new_fields(self) -> None:
         legacy_payload = {
@@ -268,7 +291,24 @@ class DashboardCompatibilityTest(unittest.TestCase):
 
     def test_dashboard_renders_runner_matrix_from_suite_summary(self) -> None:
         report_payload = {
-            "summary": [],
+            "benchmark_config": {"source_label": "ap-osaka-runner"},
+            "summary": [
+                {
+                    "region": "ap-osaka-1",
+                    "model": "openai.gpt-oss-20b",
+                    "family": "openai",
+                    "case_id": "summary-ko",
+                    "attempts": 1,
+                    "successes": 1,
+                    "failures": 0,
+                    "avg_latency_seconds": 2.0,
+                    "p95_latency_seconds": 2.0,
+                    "p99_latency_seconds": 2.0,
+                    "avg_ttft_seconds": None,
+                    "avg_total_tokens": 100.0,
+                    "avg_output_tokens_per_second": 50.0,
+                },
+            ],
             "results": [],
         }
         suite_summary = {
@@ -310,13 +350,79 @@ class DashboardCompatibilityTest(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as tmp_dir:
+            Path(tmp_dir, "ap-osaka-runner-global-smoke-r1.json").write_text(json.dumps(report_payload), encoding="utf-8")
+            html = render_html(load_reports(Path(tmp_dir)), [suite_summary])
+
+        self.assertIn("Region-to-Region Performance: global-smoke-r1", html)
+        self.assertIn("Runner Summary", html)
+        self.assertIn("adds metrics from each runner JSON report", html)
+        self.assertIn("Tok/sec 50.0", html)
+        self.assertIn("TTFT -", html)
+        self.assertIn("source best", html)
+        self.assertIn("target best", html)
+
+    def test_dashboard_renders_runner_context_and_workload_descriptions(self) -> None:
+        report_payload = {
+            "benchmark_config": {
+                "repeats": 1,
+                "concurrency_levels": [1],
+                "streaming": False,
+                "temperature": 0.0,
+                "max_tokens": 512,
+            },
+            "selected_models": [
+                {"model_id": "openai.gpt-oss-20b", "label": "OpenAI gpt-oss-20b"},
+            ],
+            "summary": [
+                {
+                    "region": "ap-osaka-1",
+                    "model": "openai.gpt-oss-20b",
+                    "family": "openai",
+                    "case_id": "nl2sql-sales-analytics",
+                    "attempts": 1,
+                    "successes": 1,
+                    "failures": 0,
+                    "avg_latency_seconds": 1.0,
+                    "p95_latency_seconds": 1.0,
+                    "avg_total_tokens": 20.0,
+                },
+            ],
+            "results": [],
+        }
+        suite_summary = {
+            "path": Path("runs/global-chat-nl2sql-r1-summary.md"),
+            "name": "global-chat-nl2sql-r1",
+            "generated_at": "2026-05-26 04:00:23 UTC",
+            "target_regions": ["ap-osaka-1"],
+            "attempts": 1,
+            "successes": 1,
+            "failures": 0,
+            "sources": [
+                {
+                    "source": "ap-osaka-runner",
+                    "status": "succeeded",
+                    "attempts": 1,
+                    "successes": 1,
+                    "failures": 0,
+                    "avg_latency": 1.0,
+                    "json": "report.json",
+                    "markdown": "report.md",
+                },
+            ],
+            "target_latency": [
+                {"source": "ap-osaka-runner", "target_region": "ap-osaka-1", "avg_latency": 1.0},
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
             Path(tmp_dir, "report.json").write_text(json.dumps(report_payload), encoding="utf-8")
             html = render_html(load_reports(Path(tmp_dir)), [suite_summary])
 
-        self.assertIn("Runner Matrix: global-smoke-r1", html)
-        self.assertIn("Runner Ranking", html)
-        self.assertIn("source best", html)
-        self.assertIn("target best", html)
+        self.assertIn("Test Context", html)
+        self.assertIn("Workload Details", html)
+        self.assertIn("OpenAI gpt-oss-20b", html)
+        self.assertIn("nl2sql-sales-analytics", html)
+        self.assertIn("SQL SELECT query", html)
 
     def test_dashboard_renders_failure_summary(self) -> None:
         payload = {

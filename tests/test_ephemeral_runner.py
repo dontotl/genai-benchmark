@@ -91,6 +91,23 @@ class EphemeralRunnerConfigTest(unittest.TestCase):
         with self.assertRaises(ConfigError):
             selected_runners(config, ["missing"])
 
+    def test_loads_four_source_managed_example(self) -> None:
+        config = load_config(Path("configs/ephemeral-4source-managed.example.json"))
+
+        self.assertEqual(config.target_regions, ["ap-osaka-1", "us-chicago-1", "eu-frankfurt-1"])
+        self.assertEqual(
+            [runner.source_label for runner in config.runners],
+            [
+                "ap-osaka-runner",
+                "ap-seoul-runner",
+                "us-chicago-runner",
+                "eu-frankfurt-runner",
+            ],
+        )
+        self.assertFalse(config.network["existing_dynamic_group_update"])
+        self.assertEqual(config.benchmark["prompts"], "prompts/chat_nl2sql_workloads.jsonl")
+        self.assertEqual(config.benchmark["families"], ["openai", "gemini"])
+
 
 class EphemeralRunnerCommandTest(unittest.TestCase):
     def test_builds_benchmark_args(self) -> None:
