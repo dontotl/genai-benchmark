@@ -38,7 +38,7 @@
   "benchmark": {
     "suite_name": "global-chat-nl2sql-load-multimodel-streaming-r1",
     "repeats": 1,
-    "concurrency_levels": "1,10,50",
+    "concurrency_levels": "1,5,10",
     "prompts": "prompts/chat_nl2sql_workloads.jsonl",
     "report_suffix": "global-chat-nl2sql-load-multimodel-streaming-r1",
     "streaming": true,
@@ -48,8 +48,7 @@
       "openai",
       "gemini",
       "grok",
-      "meta",
-      "cohere"
+      "meta"
     ],
     "extra_args": []
   },

@@ -963,11 +963,14 @@ def render_load_summary(case_rows: list[dict]) -> str:
     if not rows:
         return ""
     by_concurrency = {row["concurrency"]: row for row in rows}
+    levels = [row["concurrency"] for row in rows]
+    level_text = ", ".join(f"C{level}" for level in levels)
+    max_concurrency = max(levels)
     c1 = by_concurrency.get(1)
-    c50 = by_concurrency.get(50)
+    max_row = by_concurrency.get(max_concurrency)
     multiplier = None
-    if c1 and c50 and c1.get("p95_latency") and c50.get("p95_latency"):
-        multiplier = c50["p95_latency"] / c1["p95_latency"]
+    if c1 and max_row and max_concurrency != 1 and c1.get("p95_latency") and max_row.get("p95_latency"):
+        multiplier = max_row["p95_latency"] / c1["p95_latency"]
 
     body = []
     for row in rows:
@@ -986,11 +989,11 @@ def render_load_summary(case_rows: list[dict]) -> str:
     return (
         "<div class='section'>"
         + title_html(2, "Load Summary", "동시성 수준별로 성공률, P95 latency, tokens/sec, TTFT를 요약합니다.")
-        + "<p class='muted'>C1, C10, C50 기준으로 success rate, P95 latency, output tokens/sec, TTFT를 요약합니다. C50/C1 latency multiplier는 부하가 커질 때 P95가 얼마나 증가했는지 보여줍니다.</p>"
+        + f"<p class='muted'>{escape(level_text)} 기준으로 success rate, P95 latency, output tokens/sec, TTFT를 요약합니다. C{max_concurrency}/C1 latency multiplier는 부하가 커질 때 P95가 얼마나 증가했는지 보여줍니다.</p>"
         "<table><thead><tr><th>Concurrency</th><th>Success</th><th>P95 Latency</th><th>Tok/sec</th><th>TTFT</th></tr></thead><tbody>"
         + "".join(body)
         + "</tbody></table>"
-        f"<p class='muted'><strong>C50/C1 latency multiplier:</strong> {escape(multiplier_text)}</p>"
+        f"<p class='muted'><strong>C{max_concurrency}/C1 latency multiplier:</strong> {escape(multiplier_text)}</p>"
         "</div>"
     )
 
@@ -1069,8 +1072,8 @@ def render_load_sensitivity(case_rows: list[dict]) -> str:
         )
     return (
         "<div class='section'>"
-        + title_html(2, "Load Sensitivity", "모델별로 C1에서 C10, C50으로 올라갈 때 latency와 성공률이 어떻게 변하는지 보여줍니다.")
-        + "<p class='muted'>모델별 C1 -> C10 -> C50 변화를 통해 동시성이 커질 때 latency 증가나 성공률 하락이 어디서 발생하는지 확인합니다.</p>"
+        + title_html(2, "Load Sensitivity", "모델별로 부하 단계가 올라갈 때 latency와 성공률이 어떻게 변하는지 보여줍니다.")
+        + f"<p class='muted'>모델별 {' -> '.join(escape(f'C{level}') for level in levels)} 변화를 통해 동시성이 커질 때 latency 증가나 성공률 하락이 어디서 발생하는지 확인합니다.</p>"
         "<table><thead><tr><th>Family</th><th>Model</th>"
         + headers
         + "</tr></thead><tbody>"
@@ -1890,7 +1893,7 @@ def render_html(reports: list[dict], suite_summaries: list[dict] | None = None) 
 <body>
   <div class="page">
     {title_html(1, 'GenAI Benchmark Dashboard', 'source runner가 여러 target region의 OCI Generative AI 모델 endpoint로 같은 workload를 보내고, 동시성별 성능과 실패/skip 조합을 보여주는 정적 dashboard입니다.')}
-    <p class="lede">이 테스트는 각 source runner VM에서 같은 Chat/NL2SQL workload를 target region의 대표 모델에 C1/C10/C50 동시성 조건으로 호출해 수행합니다. 결과는 end-to-end latency, streaming TTFT, success rate, output tok/sec, 부하 증가 시 지연 배율, 지원되지 않는 region/model skip 조합을 쉽게 비교하도록 보여줍니다.</p>
+    <p class="lede">이 테스트는 각 source runner VM에서 같은 Chat/NL2SQL workload를 target region의 대표 모델에 설정된 동시성 단계로 호출해 수행합니다. 결과는 end-to-end latency, streaming TTFT, success rate, output tok/sec, 부하 증가 시 지연 배율, 지원되지 않는 region/model skip 조합을 쉽게 비교하도록 보여줍니다.</p>
     <div class="cards">{card_html}</div>
     {render_load_summary(case_rows)}
     {render_c50_ranking(case_rows)}

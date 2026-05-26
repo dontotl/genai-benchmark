@@ -107,11 +107,11 @@ class EphemeralRunnerConfigTest(unittest.TestCase):
         self.assertFalse(config.network["existing_dynamic_group_update"])
         self.assertEqual(config.shape_config, {"ocpus": 4, "memoryInGBs": 16})
         self.assertEqual(config.benchmark["prompts"], "prompts/chat_nl2sql_workloads.jsonl")
-        self.assertEqual(config.benchmark["concurrency_levels"], "1,10,50")
+        self.assertEqual(config.benchmark["concurrency_levels"], "1,5,10")
         self.assertTrue(config.benchmark["streaming"])
         self.assertTrue(config.benchmark["load_test"])
         self.assertTrue(config.benchmark["include_experimental"])
-        self.assertEqual(config.benchmark["families"], ["openai", "gemini", "grok", "meta", "cohere"])
+        self.assertEqual(config.benchmark["families"], ["openai", "gemini", "grok", "meta"])
 
 
 class EphemeralRunnerCommandTest(unittest.TestCase):

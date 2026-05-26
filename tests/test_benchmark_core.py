@@ -76,8 +76,8 @@ class ConcurrencyLevelsTest(unittest.TestCase):
             parse_concurrency_levels("1,0", 1)
 
     def test_planned_request_count_uses_load_wave_size(self) -> None:
-        self.assertEqual(planned_request_count(6, 10, 1, [1, 10, 50], load_test=True), 3660)
-        self.assertEqual(planned_request_count(6, 10, 1, [1, 10, 50], load_test=False), 180)
+        self.assertEqual(planned_request_count(6, 10, 1, [1, 5, 10], load_test=True), 960)
+        self.assertEqual(planned_request_count(6, 10, 1, [1, 5, 10], load_test=False), 180)
 
 
 class CatalogSelectionTest(unittest.TestCase):
@@ -664,7 +664,7 @@ class DashboardCompatibilityTest(unittest.TestCase):
             ("meta", "meta.llama-4-scout-17b-16e-instruct"),
             ("cohere", "cohere.command-a-03-2025"),
         ):
-            for concurrency, latency, ttft in ((1, 1.0, 0.2), (10, 2.0, 0.4), (50, 5.0, 0.8)):
+            for concurrency, latency, ttft in ((1, 1.0, 0.2), (5, 1.5, 0.3), (10, 2.0, 0.4)):
                 summary_rows.append(
                     {
                         "region": "us-chicago-1",
@@ -686,7 +686,7 @@ class DashboardCompatibilityTest(unittest.TestCase):
                     }
                 )
         payload = {
-            "benchmark_config": {"streaming": True, "concurrency_levels": [1, 10, 50]},
+            "benchmark_config": {"streaming": True, "concurrency_levels": [1, 5, 10]},
             "summary": summary_rows,
             "results": [],
             "skipped": [
@@ -704,8 +704,8 @@ class DashboardCompatibilityTest(unittest.TestCase):
             html = render_html(load_reports(Path(tmp_dir)))
 
         self.assertIn("Load Summary", html)
-        self.assertIn("C50/C1 latency multiplier", html)
-        self.assertIn("C50 Ranking", html)
+        self.assertIn("C10/C1 latency multiplier", html)
+        self.assertIn("C10 Ranking", html)
         self.assertIn("Load Sensitivity", html)
         self.assertIn("Avg TTFT", html)
         self.assertIn("family-filter", html)
