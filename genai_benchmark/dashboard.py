@@ -602,6 +602,12 @@ a:hover { text-decoration: underline; }
 details {
   margin-top: 12px;
 }
+details.debug-details {
+  background: #fffdf9;
+  border: 1px solid #ddd4c7;
+  border-radius: 14px;
+  padding: 16px;
+}
 summary {
   cursor: pointer;
   color: #4d463f;
@@ -841,8 +847,12 @@ def prompt_paths_from_reports(reports: list[dict]) -> list[Path]:
             continue
         path = Path(prompt_path)
         paths.append(path if path.is_absolute() else PROJECT_ROOT / path)
-    default_path = PROJECT_ROOT / "prompts" / "chat_nl2sql_workloads.jsonl"
-    paths.append(default_path)
+    paths.extend(
+        [
+            PROJECT_ROOT / "prompts" / "sample_prompts.jsonl",
+            PROJECT_ROOT / "prompts" / "chat_nl2sql_workloads.jsonl",
+        ]
+    )
     unique = []
     seen = set()
     for path in paths:
@@ -866,6 +876,8 @@ def load_workload_prompts(reports: list[dict]) -> dict[str, list[dict[str, str]]
             except json.JSONDecodeError:
                 continue
             case_id = payload.get("id") or f"case-{lineno}"
+            if case_id in workloads:
+                continue
             if "messages" in payload and isinstance(payload["messages"], list):
                 workloads[case_id] = [
                     {
@@ -1349,6 +1361,43 @@ def render_filter_controls(options: dict[str, list[str]]) -> str:
     )
 
 
+def render_raw_debug_details(
+    reports: list[dict],
+    case_rows: list[dict],
+    family_rows: list[dict],
+    failure_summary: list[dict],
+    failures: list[dict],
+) -> str:
+    return (
+        "<div class='section'>"
+        "<details class='debug-details'>"
+        "<summary>Raw Data / Debug Details</summary>"
+        "<p class='muted'>Result files, family-level charts, case-level metrics, and failure diagnostics for operational debugging.</p>"
+        "<div class='chart-grid'>"
+        f"{render_bars(family_rows, 'success_rate', 'Success Rate by Report / Family', '%')}"
+        f"{render_bars(family_rows, 'avg_latency', 'Average Latency by Report / Family', 's')}"
+        "</div>"
+        "<div class='section'>"
+        "<h2>Case-Level Charts</h2>"
+        "<p class='muted'>Each bar below represents one report/family/case combination so you can see where failures or slowdowns concentrate.</p>"
+        "</div>"
+        "<div class='chart-grid'>"
+        f"{render_case_bars(case_rows, 'success_rate', 'Success Rate by Case', '%')}"
+        f"{render_case_bars(case_rows, 'avg_latency', 'Average Latency by Case', 's')}"
+        "</div>"
+        "<div class='chart-grid'>"
+        f"{render_case_bars(case_rows, 'avg_tokens', 'Average Tokens by Case', '')}"
+        f"{render_case_bars(case_rows, 'avg_tokens_per_second', 'Average E2E Output Tokens/sec by Case', '')}"
+        "</div>"
+        f"{render_reports_table(reports)}"
+        f"{render_case_table(case_rows)}"
+        f"{render_failure_summary_table(failure_summary)}"
+        f"{render_failures_table(failures)}"
+        "</details>"
+        "</div>"
+    )
+
+
 def collect_overall_metrics(reports: list[dict], case_rows: list[dict]) -> dict[str, float | int | None]:
     latencies = []
     throughputs = []
@@ -1481,37 +1530,18 @@ def render_html(reports: list[dict], suite_summaries: list[dict] | None = None) 
     {render_runner_matrix(suite_summaries, reports)}
     {render_workload_details(workload_rows, workload_reports)}
     {render_filter_controls(filter_options)}
-    <div class="chart-grid">
-      {render_bars(family_rows, 'success_rate', 'Success Rate by Report / Family', '%')}
-      {render_bars(family_rows, 'avg_latency', 'Average Latency by Report / Family', 's')}
-    </div>
     <div class="section">
-      <h2>Case-Level Charts</h2>
-      <p class="muted">Each bar below represents one report/family/case combination so you can see where failures or slowdowns concentrate.</p>
+      <h2>Latency vs Token Volume</h2>
+      <p class="muted">Use this to see whether a response was slow because it generated more tokens, or because it was slower than peers with a similar token count.</p>
     </div>
     <div class="chart-grid">
-      {render_case_bars(case_rows, 'success_rate', 'Success Rate by Case', '%')}
-      {render_case_bars(case_rows, 'avg_latency', 'Average Latency by Case', 's')}
-    </div>
-    <div class="chart-grid">
-      {render_case_bars(case_rows, 'avg_tokens', 'Average Tokens by Case', '')}
-      {render_case_bars(case_rows, 'avg_tokens_per_second', 'Average E2E Output Tokens/sec by Case', '')}
-    </div>
-    <div class="section">
-      <h2>Efficiency View</h2>
-      <p class="muted">Throughput uses end-to-end latency, so it is useful for client-observed efficiency but does not separate TTFT from generation speed.</p>
-    </div>
-    <div class="chart-grid">
-      {render_scatter(case_rows, 'Latency vs Tokens Scatter')}
+      {render_scatter(case_rows, 'Latency vs Generated Tokens')}
       <div class='panel'>
         <h2>How to Read</h2>
-        <p class="muted">Points farther right produced more tokens. Points higher took longer. A model appearing much higher than peers at a similar token count is a likely latency outlier.</p>
+        <p class="muted">Points farther right produced more tokens. Points higher took longer. If two points have a similar token count, the higher point is relatively slower.</p>
       </div>
     </div>
-    {render_reports_table(reports)}
-    {render_case_table(case_rows)}
-    {render_failure_summary_table(failure_summary)}
-    {render_failures_table(failures)}
+    {render_raw_debug_details(reports, case_rows, family_rows, failure_summary, failures)}
     <div class="section">
       <div class="muted">Generated at {escape(generated_at)}</div>
     </div>

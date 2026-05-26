@@ -424,6 +424,56 @@ class DashboardCompatibilityTest(unittest.TestCase):
         self.assertIn("nl2sql-sales-analytics", html)
         self.assertIn("SQL SELECT query", html)
 
+    def test_dashboard_uses_sample_prompt_fallback_for_legacy_workloads(self) -> None:
+        report_payload = {
+            "summary": [
+                {
+                    "region": "ap-osaka-1",
+                    "model": "openai.gpt-oss-20b",
+                    "family": "openai",
+                    "case_id": "table-en",
+                    "attempts": 1,
+                    "successes": 1,
+                    "failures": 0,
+                    "avg_latency_seconds": 1.0,
+                    "p95_latency_seconds": 1.0,
+                    "p99_latency_seconds": 1.0,
+                    "avg_total_tokens": 20.0,
+                    "avg_output_tokens_per_second": 10.0,
+                },
+                {
+                    "region": "ap-osaka-1",
+                    "model": "openai.gpt-oss-20b",
+                    "family": "openai",
+                    "case_id": "ops-checklist",
+                    "attempts": 1,
+                    "successes": 1,
+                    "failures": 0,
+                    "avg_latency_seconds": 1.0,
+                    "p95_latency_seconds": 1.0,
+                    "p99_latency_seconds": 1.0,
+                    "avg_total_tokens": 20.0,
+                    "avg_output_tokens_per_second": 10.0,
+                },
+            ],
+            "results": [],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            Path(tmp_dir, "legacy.json").write_text(json.dumps(report_payload), encoding="utf-8")
+            html = render_html(load_reports(Path(tmp_dir)))
+
+        self.assertIn("Create a compact markdown table", html)
+        self.assertIn("운영 환경에서 GenAI 모델 benchmark를 수행할 때 확인해야 할 체크리스트 6개", html)
+
+    def test_dashboard_moves_raw_tables_into_debug_details(self) -> None:
+        html = render_html([])
+
+        self.assertIn("Raw Data / Debug Details", html)
+        self.assertIn("<summary>Raw Data / Debug Details</summary>", html)
+        self.assertIn("Latency vs Token Volume", html)
+        self.assertNotIn("Efficiency View", html)
+
     def test_dashboard_renders_failure_summary(self) -> None:
         payload = {
             "summary": [],
