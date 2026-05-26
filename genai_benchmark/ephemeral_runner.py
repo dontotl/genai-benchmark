@@ -185,6 +185,8 @@ def benchmark_args(config: RunnerConfig, runner: Runner) -> list[str]:
     )
     if benchmark.get("streaming"):
         args.append("--streaming")
+    if benchmark.get("load_test"):
+        args.append("--load-test")
     if benchmark.get("include_experimental"):
         args.append("--include-experimental")
     for key in ("temperature", "max_tokens"):

@@ -402,13 +402,15 @@ def run_benchmark(
     results: List[RunResult] = []
     concurrency_levels = getattr(args, "resolved_concurrency_levels", [args.concurrency])
     streaming = bool(getattr(args, "streaming", False))
+    load_test = bool(getattr(args, "load_test", False))
 
     for spec, region in execution_targets:
         for case in cases:
             llm_factory = make_thread_local_llm_factory(args, region, spec.model_id)
             prompt_messages = to_langchain_messages(case.messages)
             for concurrency in concurrency_levels:
-                iterations = range(1, args.repeats + 1)
+                invocation_count = args.repeats * concurrency if load_test else args.repeats
+                iterations = range(1, invocation_count + 1)
                 if concurrency <= 1:
                     for iteration in iterations:
                         results.append(

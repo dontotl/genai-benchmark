@@ -86,6 +86,14 @@ def parse_args() -> argparse.Namespace:
         help="Use streaming responses to measure TTFT and post-TTFT output tokens/sec.",
     )
     parser.add_argument(
+        "--load-test",
+        action="store_true",
+        help=(
+            "Treat each concurrency level as a load wave. "
+            "Each level runs concurrency * repeats invocations instead of repeats invocations."
+        ),
+    )
+    parser.add_argument(
         "--source-label",
         default=os.getenv("OCI_APP_REGION_LABEL", ""),
         help="Optional label describing where the benchmark client is running from.",
@@ -170,10 +178,23 @@ def build_benchmark_config(args: argparse.Namespace, prompt_path: Path, regions:
         "temperature": args.temperature,
         "max_tokens": args.max_tokens,
         "streaming": args.streaming,
+        "load_test": args.load_test,
         "families": args.families or list(DEFAULT_FAMILIES),
         "models": args.models or [],
         "include_experimental": args.include_experimental,
     }
+
+
+def planned_request_count(
+    case_count: int,
+    target_count: int,
+    repeats: int,
+    concurrency_levels: list[int],
+    load_test: bool,
+) -> int:
+    wave_sizes = concurrency_levels if load_test else [1 for _ in concurrency_levels]
+    requests_per_case_target = repeats * sum(wave_sizes)
+    return case_count * target_count * requests_per_case_target
 
 
 def print_dry_run(
@@ -195,8 +216,12 @@ def print_dry_run(
         print(f"- {model.model_id} [{model.family}]")
     print(f"Concurrency levels: {', '.join(str(level) for level in concurrency_levels)}")
     print(f"Streaming: {'yes' if args.streaming else 'no'}")
+    print(f"Load test mode: {'yes' if args.load_test else 'no'}")
     print(f"Runnable region/model targets: {len(execution_targets)}")
-    print(f"Planned requests: {len(cases) * len(execution_targets) * args.repeats * len(concurrency_levels)}")
+    print(
+        "Planned requests: "
+        f"{planned_request_count(len(cases), len(execution_targets), args.repeats, concurrency_levels, args.load_test)}"
+    )
     for case in cases:
         print(f"- case {case.case_id}: {len(case.messages)} message(s)")
     if skipped:

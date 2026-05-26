@@ -12,8 +12,8 @@
   "work_dir": "/home/opc/genai-benchmark",
   "shape": "VM.Standard.E4.Flex",
   "shape_config": {
-    "ocpus": 1,
-    "memoryInGBs": 8
+    "ocpus": 4,
+    "memoryInGBs": 16
   },
   "network": {
     "mode": "managed_public",
@@ -42,6 +42,7 @@
     "prompts": "prompts/chat_nl2sql_workloads.jsonl",
     "report_suffix": "global-chat-nl2sql-load-multimodel-streaming-r1",
     "streaming": true,
+    "load_test": true,
     "include_experimental": true,
     "families": [
       "openai",

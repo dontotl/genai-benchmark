@@ -887,7 +887,7 @@ def render_runner_context(summary: dict, reports: list[dict]) -> str:
         "<div class='section'>"
         "<div class='panel'>"
         + title_html(2, "Test Context", "벤치마크 실행 조건, 선택 모델, workload, 동시성, 생성 설정을 한곳에서 확인합니다.")
-        + "<p class='muted'>각 source runner가 같은 workload를 target region으로 보내고 latency, 처리량, 성공률을 비교합니다.</p>"
+        + "<p class='muted'>각 source runner가 같은 workload를 target region으로 보내고 latency, 처리량, 성공률을 비교합니다. 모델별 파라미터 수와 아키텍처는 다르므로, 이 결과는 동일 파라미터급 품질 비교가 아니라 동일 실행 조건에서의 managed serving 성능 비교입니다.</p>"
         "<ul class='context-list'>"
         f"<li>Models tested:<ul>{model_items}</ul></li>"
         f"<li>Workloads tested: <code>{escape(', '.join(case_ids) if case_ids else '-')}</code></li>"
@@ -1889,8 +1889,8 @@ def render_html(reports: list[dict], suite_summaries: list[dict] | None = None) 
 </head>
 <body>
   <div class="page">
-    {title_html(1, 'GenAI Benchmark Dashboard', 'runs/ 디렉터리의 benchmark JSON report를 모아 성능, 부하 민감도, 실패, skip 조합을 보여주는 정적 dashboard입니다.')}
-    <p class="lede">현재 <code>runs/</code> JSON 결과에서 생성한 정적 dashboard입니다. 브라우저에서 바로 열어 볼 수 있습니다.</p>
+    {title_html(1, 'GenAI Benchmark Dashboard', 'source runner가 여러 target region의 OCI Generative AI 모델 endpoint로 같은 workload를 보내고, 동시성별 성능과 실패/skip 조합을 보여주는 정적 dashboard입니다.')}
+    <p class="lede">이 테스트는 각 source runner VM에서 같은 Chat/NL2SQL workload를 target region의 대표 모델에 C1/C10/C50 동시성 조건으로 호출해 수행합니다. 결과는 end-to-end latency, streaming TTFT, success rate, output tok/sec, 부하 증가 시 지연 배율, 지원되지 않는 region/model skip 조합을 쉽게 비교하도록 보여줍니다.</p>
     <div class="cards">{card_html}</div>
     {render_load_summary(case_rows)}
     {render_c50_ranking(case_rows)}

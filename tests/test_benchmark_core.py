@@ -8,16 +8,18 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import genai_benchmark.runner as runner_module
-from genai_benchmark.cli import parse_concurrency_levels
+from genai_benchmark.cli import parse_concurrency_levels, planned_request_count
 from genai_benchmark.catalog import ModelSpec, get_family_names, resolve_models
 from genai_benchmark.dashboard import load_reports, load_suite_summaries, render_html
 from genai_benchmark.runner import (
+    BenchmarkCase,
     RunResult,
     aggregate_results,
     extract_failure_details,
     invoke_streaming,
     load_cases,
     make_thread_local_llm_factory,
+    run_benchmark,
 )
 from genai_benchmark.site import choose_focus_report
 
@@ -72,6 +74,10 @@ class ConcurrencyLevelsTest(unittest.TestCase):
             parse_concurrency_levels("1,zero", 1)
         with self.assertRaises(SystemExit):
             parse_concurrency_levels("1,0", 1)
+
+    def test_planned_request_count_uses_load_wave_size(self) -> None:
+        self.assertEqual(planned_request_count(6, 10, 1, [1, 10, 50], load_test=True), 3660)
+        self.assertEqual(planned_request_count(6, 10, 1, [1, 10, 50], load_test=False), 180)
 
 
 class CatalogSelectionTest(unittest.TestCase):
@@ -200,6 +206,121 @@ class ThreadLocalFactoryTest(unittest.TestCase):
         self.assertIs(same_thread_first, same_thread_second)
         self.assertIsNot(same_thread_first, other_thread)
         self.assertEqual(len(calls), 2)
+
+
+class RunBenchmarkLoadTest(unittest.TestCase):
+    def test_load_test_runs_concurrency_sized_waves(self) -> None:
+        original_factory = runner_module.make_thread_local_llm_factory
+        original_run_single = runner_module.run_single_invocation
+        original_to_messages = runner_module.to_langchain_messages
+        spec = ModelSpec("openai.gpt-oss-20b", "openai", "OpenAI gpt-oss-20b", ("ap-osaka-1",))
+        case = BenchmarkCase("summary-ko", [{"role": "user", "content": "테스트"}])
+
+        def fake_factory(_args: object, _region: str, _model: str) -> object:
+            return object
+
+        def fake_run_single(
+            region: str,
+            model_spec: ModelSpec,
+            benchmark_case: BenchmarkCase,
+            iteration: int,
+            concurrency: int,
+            _llm_factory: object,
+            _prompt_messages: object,
+            streaming: bool,
+        ) -> RunResult:
+            return RunResult(
+                region=region,
+                model=model_spec.model_id,
+                family=model_spec.family,
+                case_id=benchmark_case.case_id,
+                iteration=iteration,
+                concurrency=concurrency,
+                latency_seconds=0.1,
+                ttft_seconds=None,
+                input_tokens=1,
+                output_tokens=1,
+                total_tokens=2,
+                output_tokens_per_second=10.0,
+                post_ttft_output_tokens_per_second=None,
+                streaming=streaming,
+                response_preview="ok",
+                error=None,
+                error_type=None,
+                http_status=None,
+                response_body_preview=None,
+                request_id=None,
+            )
+
+        runner_module.make_thread_local_llm_factory = fake_factory
+        runner_module.run_single_invocation = fake_run_single
+        runner_module.to_langchain_messages = lambda messages: messages
+        try:
+            results = run_benchmark(
+                SimpleNamespace(
+                    repeats=1,
+                    concurrency=1,
+                    resolved_concurrency_levels=[1, 10],
+                    streaming=False,
+                    load_test=True,
+                ),
+                [case],
+                [(spec, "ap-osaka-1")],
+            )
+        finally:
+            runner_module.make_thread_local_llm_factory = original_factory
+            runner_module.run_single_invocation = original_run_single
+            runner_module.to_langchain_messages = original_to_messages
+
+        self.assertEqual(len(results), 11)
+        self.assertEqual(sum(1 for result in results if result.concurrency == 1), 1)
+        self.assertEqual(sum(1 for result in results if result.concurrency == 10), 10)
+        self.assertEqual(sorted(result.iteration for result in results if result.concurrency == 10), list(range(1, 11)))
+
+    def test_default_mode_preserves_repeats_per_level(self) -> None:
+        original_factory = runner_module.make_thread_local_llm_factory
+        original_run_single = runner_module.run_single_invocation
+        original_to_messages = runner_module.to_langchain_messages
+        spec = ModelSpec("openai.gpt-oss-20b", "openai", "OpenAI gpt-oss-20b", ("ap-osaka-1",))
+        case = BenchmarkCase("summary-ko", [{"role": "user", "content": "테스트"}])
+
+        def fake_factory(_args: object, _region: str, _model: str) -> object:
+            return object
+
+        def fake_run_single(
+            region: str,
+            model_spec: ModelSpec,
+            benchmark_case: BenchmarkCase,
+            iteration: int,
+            concurrency: int,
+            _llm_factory: object,
+            _prompt_messages: object,
+            streaming: bool,
+        ) -> RunResult:
+            return make_result(concurrency=concurrency, iteration=iteration, latency=0.1, output_tokens=1, streaming=streaming)
+
+        runner_module.make_thread_local_llm_factory = fake_factory
+        runner_module.run_single_invocation = fake_run_single
+        runner_module.to_langchain_messages = lambda messages: messages
+        try:
+            results = run_benchmark(
+                SimpleNamespace(
+                    repeats=1,
+                    concurrency=1,
+                    resolved_concurrency_levels=[1, 10],
+                    streaming=False,
+                    load_test=False,
+                ),
+                [case],
+                [(spec, "ap-osaka-1")],
+            )
+        finally:
+            runner_module.make_thread_local_llm_factory = original_factory
+            runner_module.run_single_invocation = original_run_single
+            runner_module.to_langchain_messages = original_to_messages
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual([result.concurrency for result in results], [1, 10])
 
 
 class FailureDetailsTest(unittest.TestCase):

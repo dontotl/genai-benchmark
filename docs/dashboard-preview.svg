@@ -7,7 +7,7 @@
   </defs>
   <rect width="1200" height="720" fill="url(#bg)" />
   <text x="56" y="62" fill="#1d1b18" font-size="42" font-weight="700" font-family="Arial, sans-serif">GenAI Benchmark Dashboard Preview</text>
-  <text x="56" y="94" fill="#5a534b" font-size="20" font-family="Arial, sans-serif">Latest focus report: us-chicago-runner-global-chat-nl2sql-r1 | Generated 2026-05-26 06:55 UTC</text>
+  <text x="56" y="94" fill="#5a534b" font-size="20" font-family="Arial, sans-serif">Latest focus report: us-chicago-runner-global-chat-nl2sql-r1 | Generated 2026-05-26 07:21 UTC</text>
   
             <g>
               <rect x="56" y="120" width="208" height="108" rx="18" fill="#fffdf9" stroke="#d9cfbf"/>
