@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 
-from .dashboard import load_reports, render_html
+from .dashboard import load_reports, load_suite_summaries, render_html
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -166,8 +166,10 @@ def write_docs(reports: list[dict], docs_dir: Path) -> None:
     docs_dir.mkdir(parents=True, exist_ok=True)
     focus_report = choose_focus_report(reports)
     focus = summarize_focus(focus_report)
+    runs_dir = reports[0]["path"].parent if reports and reports[0].get("path") else RUNS_DIR
+    suite_summaries = load_suite_summaries(runs_dir)
 
-    dashboard_html = render_html(reports)
+    dashboard_html = render_html(reports, suite_summaries)
     (docs_dir / "dashboard.html").write_text(dashboard_html, encoding="utf-8")
     (docs_dir / "index.html").write_text(dashboard_html, encoding="utf-8")
     (docs_dir / "dashboard-preview.svg").write_text(

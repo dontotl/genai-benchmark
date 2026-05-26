@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from html import escape
@@ -45,6 +46,108 @@ def load_reports(runs_dir: Path) -> list[dict]:
             }
         )
     return reports
+
+
+def clean_markdown_cell(value: str) -> str:
+    value = value.strip()
+    if value.startswith("`") and value.endswith("`"):
+        return value[1:-1]
+    link_match = re.fullmatch(r"\[([^\]]+)\]\(([^)]+)\)", value)
+    if link_match:
+        return link_match.group(2)
+    return value
+
+
+def parse_seconds(value: str) -> float | None:
+    value = clean_markdown_cell(value)
+    if value == "-":
+        return None
+    if value.endswith("s"):
+        value = value[:-1]
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def parse_int(value: str) -> int:
+    return int(clean_markdown_cell(value))
+
+
+def parse_table_row(line: str) -> list[str]:
+    return [clean_markdown_cell(cell) for cell in line.strip().strip("|").split("|")]
+
+
+def parse_suite_summary(path: Path) -> dict | None:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not lines or not lines[0].startswith("# ") or not lines[0].endswith(" Suite Summary"):
+        return None
+
+    name = lines[0].removeprefix("# ").removesuffix(" Suite Summary").strip()
+    summary = {
+        "path": path,
+        "name": name,
+        "generated_at": "",
+        "target_regions": [],
+        "attempts": 0,
+        "successes": 0,
+        "failures": 0,
+        "sources": [],
+        "target_latency": [],
+    }
+
+    section = ""
+    for line in lines[1:]:
+        if line.startswith("- Generated At:"):
+            summary["generated_at"] = clean_markdown_cell(line.split(":", 1)[1].strip())
+        elif line.startswith("- Target Regions:"):
+            summary["target_regions"] = re.findall(r"`([^`]+)`", line)
+        elif line.startswith("- Attempts:"):
+            summary["attempts"] = parse_int(line.split(":", 1)[1].strip())
+        elif line.startswith("- Successes:"):
+            summary["successes"] = parse_int(line.split(":", 1)[1].strip())
+        elif line.startswith("- Failures:"):
+            summary["failures"] = parse_int(line.split(":", 1)[1].strip())
+        elif line == "## Source Runner Summary":
+            section = "sources"
+        elif line == "## Target Region Average Latency":
+            section = "target_latency"
+        elif line.startswith("|") and "---" not in line and not line.startswith("| Source |"):
+            cells = parse_table_row(line)
+            if section == "sources" and len(cells) >= 8:
+                summary["sources"].append(
+                    {
+                        "source": cells[0],
+                        "status": cells[1],
+                        "attempts": parse_int(cells[2]),
+                        "successes": parse_int(cells[3]),
+                        "failures": parse_int(cells[4]),
+                        "avg_latency": parse_seconds(cells[5]),
+                        "json": cells[6],
+                        "markdown": cells[7],
+                    }
+                )
+            elif section == "target_latency" and len(cells) >= 3:
+                summary["target_latency"].append(
+                    {
+                        "source": cells[0],
+                        "target_region": cells[1],
+                        "avg_latency": parse_seconds(cells[2]),
+                    }
+                )
+
+    if not summary["sources"] or not summary["target_latency"]:
+        return None
+    return summary
+
+
+def load_suite_summaries(runs_dir: Path) -> list[dict]:
+    summaries = []
+    for path in sorted(runs_dir.glob("*-summary.md")):
+        summary = parse_suite_summary(path)
+        if summary:
+            summaries.append(summary)
+    return summaries
 
 
 def detect_timestamp(results: list[dict]) -> str:
@@ -394,10 +497,194 @@ a:hover { text-decoration: underline; }
 .legend-dot.gemini { background: #f59e0b; }
 .legend-dot.grok { background: #60a5fa; }
 .legend-dot.meta { background: #c084fc; }
+.matrix-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.9fr);
+  gap: 18px;
+}
+.heatmap {
+  display: grid;
+  gap: 8px;
+  align-items: stretch;
+}
+.heat-cell {
+  min-height: 62px;
+  border: 1px solid rgba(46, 39, 31, 0.12);
+  border-radius: 8px;
+  padding: 10px;
+}
+.heat-cell.header {
+  min-height: auto;
+  background: #f1eadf;
+  color: #4d463f;
+  font-size: 12px;
+  font-weight: 700;
+}
+.heat-cell.source {
+  background: #fffaf2;
+  font-weight: 700;
+}
+.heat-value {
+  font-size: 20px;
+  font-weight: 800;
+}
+.heat-note {
+  color: #4d463f;
+  font-size: 12px;
+  margin-top: 4px;
+}
+.runner-tiles {
+  display: grid;
+  gap: 12px;
+}
+.runner-tile {
+  background: #fffaf2;
+  border: 1px solid #ddd4c7;
+  border-radius: 8px;
+  padding: 14px;
+}
+.runner-tile h3 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+.tile-metric {
+  font-size: 26px;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+.tile-line {
+  color: #4d463f;
+  font-size: 13px;
+  margin-top: 4px;
+}
 @media (max-width: 900px) {
   .chart-grid { grid-template-columns: 1fr; }
+  .matrix-grid { grid-template-columns: 1fr; }
 }
 """
+
+
+def latest_suite_summary(summaries: list[dict]) -> dict | None:
+    if not summaries:
+        return None
+    return max(summaries, key=lambda item: (item.get("generated_at") or "", item["name"]))
+
+
+def format_latency(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.3f}s"
+
+
+def heat_color(value: float | None, minimum: float, maximum: float) -> str:
+    if value is None:
+        return "#f3eee6"
+    if maximum <= minimum:
+        return "#d1fae5"
+    midpoint = minimum + (maximum - minimum) / 2
+    if value <= midpoint:
+        ratio = (value - minimum) / (midpoint - minimum) if midpoint > minimum else 0.0
+        start = (209, 250, 229)
+        end = (254, 243, 199)
+    else:
+        ratio = (value - midpoint) / (maximum - midpoint) if maximum > midpoint else 0.0
+        start = (254, 243, 199)
+        end = (254, 226, 226)
+    rgb = [round(start[index] + (end[index] - start[index]) * ratio) for index in range(3)]
+    return f"rgb({rgb[0]}, {rgb[1]}, {rgb[2]})"
+
+
+def render_runner_matrix(summaries: list[dict]) -> str:
+    summary = latest_suite_summary(summaries)
+    if not summary:
+        return ""
+
+    sources = [row["source"] for row in summary["sources"]]
+    targets = summary["target_regions"] or sorted({row["target_region"] for row in summary["target_latency"]})
+    latency_by_pair = {
+        (row["source"], row["target_region"]): row["avg_latency"]
+        for row in summary["target_latency"]
+    }
+    latencies = [value for value in latency_by_pair.values() if value is not None]
+    minimum = min(latencies) if latencies else 0.0
+    maximum = max(latencies) if latencies else 0.0
+    source_best = {}
+    target_best = {}
+    for source in sources:
+        values = [
+            (target, latency_by_pair.get((source, target)))
+            for target in targets
+            if latency_by_pair.get((source, target)) is not None
+        ]
+        if values:
+            source_best[source] = min(values, key=lambda item: item[1])
+    for target in targets:
+        values = [
+            (source, latency_by_pair.get((source, target)))
+            for source in sources
+            if latency_by_pair.get((source, target)) is not None
+        ]
+        if values:
+            target_best[target] = min(values, key=lambda item: item[1])
+
+    grid_columns = "150px " + " ".join("minmax(130px, 1fr)" for _ in targets)
+    cells = [
+        f"<div class='heatmap' style='grid-template-columns:{grid_columns}'>",
+        "<div class='heat-cell header'>Source / Target</div>",
+    ]
+    for target in targets:
+        cells.append(f"<div class='heat-cell header'><code>{escape(target)}</code></div>")
+    for source in sources:
+        cells.append(f"<div class='heat-cell source'><code>{escape(source)}</code></div>")
+        for target in targets:
+            latency = latency_by_pair.get((source, target))
+            labels = []
+            if source_best.get(source, (None, None))[0] == target:
+                labels.append("source best")
+            if target_best.get(target, (None, None))[0] == source:
+                labels.append("target best")
+            note = ", ".join(labels) if labels else "avg latency"
+            cells.append(
+                "<div class='heat-cell' "
+                f"style='background:{heat_color(latency, minimum, maximum)}'>"
+                f"<div class='heat-value'>{escape(format_latency(latency))}</div>"
+                f"<div class='heat-note'>{escape(note)}</div>"
+                "</div>"
+            )
+    cells.append("</div>")
+
+    source_rows = {row["source"]: row for row in summary["sources"]}
+    tiles = ["<div class='runner-tiles'>"]
+    for source in sources:
+        row = source_rows[source]
+        values = [
+            (target, latency_by_pair.get((source, target)))
+            for target in targets
+            if latency_by_pair.get((source, target)) is not None
+        ]
+        best = min(values, key=lambda item: item[1]) if values else ("-", None)
+        worst = max(values, key=lambda item: item[1]) if values else ("-", None)
+        success_rate = (row["successes"] / row["attempts"] * 100) if row["attempts"] else 0.0
+        tiles.append(
+            "<div class='runner-tile'>"
+            f"<h3><code>{escape(source)}</code></h3>"
+            f"<div class='tile-metric'>{escape(format_latency(row['avg_latency']))}</div>"
+            f"<div class='tile-line'>Best target: <code>{escape(best[0])}</code> ({escape(format_latency(best[1]))})</div>"
+            f"<div class='tile-line'>Worst target: <code>{escape(worst[0])}</code> ({escape(format_latency(worst[1]))})</div>"
+            f"<div class='tile-line'>Success: {row['successes']}/{row['attempts']} ({success_rate:.1f}%)</div>"
+            "</div>"
+        )
+    tiles.append("</div>")
+
+    return (
+        "<div class='section'>"
+        f"<h2>Runner Matrix: {escape(summary['name'])}</h2>"
+        "<p class='muted'>Uses the existing suite summary values. Lower latency is better; highlighted notes mark each source or target winner.</p>"
+        "<div class='matrix-grid'>"
+        f"<div class='panel'>{''.join(cells)}</div>"
+        f"<div class='panel'><h2>Runner Ranking</h2>{''.join(tiles)}</div>"
+        "</div></div>"
+    )
 
 
 def render_bars(rows: list[dict], metric: str, title: str, value_suffix: str) -> str:
@@ -737,7 +1024,8 @@ applyFilters();
 """
 
 
-def render_html(reports: list[dict]) -> str:
+def render_html(reports: list[dict], suite_summaries: list[dict] | None = None) -> str:
+    suite_summaries = suite_summaries or []
     family_rows = aggregate_family_metrics(reports)
     case_rows = aggregate_case_metrics(reports)
     failures = collect_failures(reports)
@@ -778,6 +1066,7 @@ def render_html(reports: list[dict]) -> str:
     <p class="lede">Generated from current JSON results in <code>runs/</code>. This view is static and self-contained, so you can open it directly in a browser.</p>
     <div class="cards">{card_html}</div>
     {render_filter_controls(filter_options)}
+    {render_runner_matrix(suite_summaries)}
     <div class="chart-grid">
       {render_bars(family_rows, 'success_rate', 'Success Rate by Report / Family', '%')}
       {render_bars(family_rows, 'avg_latency', 'Average Latency by Report / Family', 's')}
@@ -826,7 +1115,7 @@ def main() -> int:
     reports = load_reports(runs_dir)
     if not reports:
         raise SystemExit(f"No JSON reports found in {runs_dir}")
-    output.write_text(render_html(reports), encoding="utf-8")
+    output.write_text(render_html(reports, load_suite_summaries(runs_dir)), encoding="utf-8")
     print(f"Wrote dashboard to {output}")
     return 0
 

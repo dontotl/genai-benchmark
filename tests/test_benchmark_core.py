@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import genai_benchmark.runner as runner_module
 from genai_benchmark.cli import parse_concurrency_levels
 from genai_benchmark.catalog import ModelSpec
-from genai_benchmark.dashboard import load_reports, render_html
+from genai_benchmark.dashboard import load_reports, load_suite_summaries, render_html
 from genai_benchmark.runner import (
     RunResult,
     aggregate_results,
@@ -228,6 +228,95 @@ class DashboardCompatibilityTest(unittest.TestCase):
         self.assertIn("case-sort", html)
         self.assertIn("Avg E2E Output Tokens/sec", html)
         self.assertIn("Avg TTFT", html)
+        self.assertNotIn("Runner Matrix", html)
+
+    def test_dashboard_reads_suite_summary_markdown(self) -> None:
+        summary_markdown = """# global-smoke-r1 Suite Summary
+
+- Generated At: `2026-05-26 04:00:23 UTC`
+- Target Regions: `ap-osaka-1`, `us-chicago-1`
+- Attempts: `4`
+- Successes: `4`
+- Failures: `0`
+
+## Source Runner Summary
+
+| Source | Status | Attempts | Successes | Failures | Avg Latency | JSON | Markdown |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- |
+| `ap-osaka-runner` | `succeeded` | 2 | 2 | 0 | 2.100s | [json](ap-osaka-runner-global-smoke-r1.json) | [md](ap-osaka-runner-global-smoke-r1.md) |
+| `us-chicago-runner` | `succeeded` | 2 | 2 | 0 | 1.900s | [json](us-chicago-runner-global-smoke-r1.json) | [md](us-chicago-runner-global-smoke-r1.md) |
+
+## Target Region Average Latency
+
+| Source | Target Region | Avg Latency |
+| --- | --- | ---: |
+| `ap-osaka-runner` | `ap-osaka-1` | 2.000s |
+| `ap-osaka-runner` | `us-chicago-1` | 2.200s |
+| `us-chicago-runner` | `ap-osaka-1` | 2.300s |
+| `us-chicago-runner` | `us-chicago-1` | 1.500s |
+"""
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            Path(tmp_dir, "global-smoke-r1-summary.md").write_text(summary_markdown, encoding="utf-8")
+            summaries = load_suite_summaries(Path(tmp_dir))
+
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0]["name"], "global-smoke-r1")
+        self.assertEqual(summaries[0]["target_regions"], ["ap-osaka-1", "us-chicago-1"])
+        self.assertEqual(summaries[0]["sources"][0]["avg_latency"], 2.1)
+        self.assertEqual(summaries[0]["target_latency"][3]["avg_latency"], 1.5)
+
+    def test_dashboard_renders_runner_matrix_from_suite_summary(self) -> None:
+        report_payload = {
+            "summary": [],
+            "results": [],
+        }
+        suite_summary = {
+            "path": Path("runs/global-smoke-r1-summary.md"),
+            "name": "global-smoke-r1",
+            "generated_at": "2026-05-26 04:00:23 UTC",
+            "target_regions": ["ap-osaka-1", "us-chicago-1"],
+            "attempts": 4,
+            "successes": 4,
+            "failures": 0,
+            "sources": [
+                {
+                    "source": "ap-osaka-runner",
+                    "status": "succeeded",
+                    "attempts": 2,
+                    "successes": 2,
+                    "failures": 0,
+                    "avg_latency": 2.1,
+                    "json": "ap-osaka-runner-global-smoke-r1.json",
+                    "markdown": "ap-osaka-runner-global-smoke-r1.md",
+                },
+                {
+                    "source": "us-chicago-runner",
+                    "status": "succeeded",
+                    "attempts": 2,
+                    "successes": 2,
+                    "failures": 0,
+                    "avg_latency": 1.9,
+                    "json": "us-chicago-runner-global-smoke-r1.json",
+                    "markdown": "us-chicago-runner-global-smoke-r1.md",
+                },
+            ],
+            "target_latency": [
+                {"source": "ap-osaka-runner", "target_region": "ap-osaka-1", "avg_latency": 2.0},
+                {"source": "ap-osaka-runner", "target_region": "us-chicago-1", "avg_latency": 2.2},
+                {"source": "us-chicago-runner", "target_region": "ap-osaka-1", "avg_latency": 2.3},
+                {"source": "us-chicago-runner", "target_region": "us-chicago-1", "avg_latency": 1.5},
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            Path(tmp_dir, "report.json").write_text(json.dumps(report_payload), encoding="utf-8")
+            html = render_html(load_reports(Path(tmp_dir)), [suite_summary])
+
+        self.assertIn("Runner Matrix: global-smoke-r1", html)
+        self.assertIn("Runner Ranking", html)
+        self.assertIn("source best", html)
+        self.assertIn("target best", html)
 
     def test_dashboard_renders_failure_summary(self) -> None:
         payload = {

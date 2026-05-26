@@ -7,36 +7,36 @@
   </defs>
   <rect width="1200" height="720" fill="url(#bg)" />
   <text x="56" y="62" fill="#1d1b18" font-size="42" font-weight="700" font-family="Arial, sans-serif">GenAI Benchmark Dashboard Preview</text>
-  <text x="56" y="94" fill="#5a534b" font-size="20" font-family="Arial, sans-serif">Latest focus report: cross-region-baseline-r3 | Generated 2026-05-18 07:53 UTC</text>
+  <text x="56" y="94" fill="#5a534b" font-size="20" font-family="Arial, sans-serif">Latest focus report: eu-frankfurt-runner-global-smoke-r1 | Generated 2026-05-26 04:09 UTC</text>
   
             <g>
               <rect x="56" y="120" width="208" height="108" rx="18" fill="#fffdf9" stroke="#d9cfbf"/>
               <text x="74" y="150" fill="#6b635b" font-size="18" font-family="Arial, sans-serif">Focus Report</text>
-              <text x="74" y="192" fill="#1d1b18" font-size="34" font-weight="700" font-family="Arial, sans-serif">cross-region-baseline-r3</text>
+              <text x="74" y="192" fill="#1d1b18" font-size="34" font-weight="700" font-family="Arial, sans-serif">eu-frankfurt-runner-global-smoke-r1</text>
             </g>
             
             <g>
               <rect x="280" y="120" width="208" height="108" rx="18" fill="#fffdf9" stroke="#d9cfbf"/>
               <text x="298" y="150" fill="#6b635b" font-size="18" font-family="Arial, sans-serif">Attempts</text>
-              <text x="298" y="192" fill="#1d1b18" font-size="34" font-weight="700" font-family="Arial, sans-serif">54</text>
+              <text x="298" y="192" fill="#1d1b18" font-size="34" font-weight="700" font-family="Arial, sans-serif">18</text>
             </g>
             
             <g>
               <rect x="504" y="120" width="208" height="108" rx="18" fill="#fffdf9" stroke="#d9cfbf"/>
               <text x="522" y="150" fill="#6b635b" font-size="18" font-family="Arial, sans-serif">Successes</text>
-              <text x="522" y="192" fill="#1d1b18" font-size="34" font-weight="700" font-family="Arial, sans-serif">45</text>
+              <text x="522" y="192" fill="#1d1b18" font-size="34" font-weight="700" font-family="Arial, sans-serif">18</text>
             </g>
             
             <g>
               <rect x="728" y="120" width="208" height="108" rx="18" fill="#fffdf9" stroke="#d9cfbf"/>
               <text x="746" y="150" fill="#6b635b" font-size="18" font-family="Arial, sans-serif">Failures</text>
-              <text x="746" y="192" fill="#1d1b18" font-size="34" font-weight="700" font-family="Arial, sans-serif">9</text>
+              <text x="746" y="192" fill="#1d1b18" font-size="34" font-weight="700" font-family="Arial, sans-serif">0</text>
             </g>
             
             <g>
               <rect x="952" y="120" width="208" height="108" rx="18" fill="#fffdf9" stroke="#d9cfbf"/>
               <text x="970" y="150" fill="#6b635b" font-size="18" font-family="Arial, sans-serif">Success Rate</text>
-              <text x="970" y="192" fill="#1d1b18" font-size="34" font-weight="700" font-family="Arial, sans-serif">83.3%</text>
+              <text x="970" y="192" fill="#1d1b18" font-size="34" font-weight="700" font-family="Arial, sans-serif">100.0%</text>
             </g>
             
   <rect x="56" y="280" width="1088" height="46" rx="12" fill="#f1eadf" /><text x="76" y="309" fill="#4d463f" font-size="18" font-weight="700" font-family="Arial, sans-serif">Region</text><text x="300" y="309" fill="#4d463f" font-size="18" font-weight="700" font-family="Arial, sans-serif">Family</text><text x="460" y="309" fill="#4d463f" font-size="18" font-weight="700" font-family="Arial, sans-serif">Success</text><text x="650" y="309" fill="#4d463f" font-size="18" font-weight="700" font-family="Arial, sans-serif">Rate</text><text x="820" y="309" fill="#4d463f" font-size="18" font-weight="700" font-family="Arial, sans-serif">Avg Latency</text>
@@ -45,9 +45,9 @@
               <text x="76" y="339" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">ap-osaka-1</text>
               <rect x="292" y="319" width="98" height="28" rx="14" fill="#fef3c7"/>
               <text x="341" y="338" text-anchor="middle" fill="#92400e" font-size="15" font-weight="700" font-family="Arial, sans-serif">gemini</text>
-              <text x="460" y="339" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">6/9</text>
-              <text x="650" y="339" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">66.7%</text>
-              <text x="820" y="339" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">3.120s</text>
+              <text x="460" y="339" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">3/3</text>
+              <text x="650" y="339" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">100.0%</text>
+              <text x="820" y="339" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">3.421s</text>
             </g>
             
             <g>
@@ -55,9 +55,9 @@
               <text x="76" y="399" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">ap-osaka-1</text>
               <rect x="292" y="379" width="98" height="28" rx="14" fill="#ccfbf1"/>
               <text x="341" y="398" text-anchor="middle" fill="#115e59" font-size="15" font-weight="700" font-family="Arial, sans-serif">openai</text>
-              <text x="460" y="399" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">9/9</text>
+              <text x="460" y="399" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">3/3</text>
               <text x="650" y="399" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">100.0%</text>
-              <text x="820" y="399" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">1.171s</text>
+              <text x="820" y="399" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">2.723s</text>
             </g>
             
             <g>
@@ -65,9 +65,9 @@
               <text x="76" y="459" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">eu-frankfurt-1</text>
               <rect x="292" y="439" width="98" height="28" rx="14" fill="#fef3c7"/>
               <text x="341" y="458" text-anchor="middle" fill="#92400e" font-size="15" font-weight="700" font-family="Arial, sans-serif">gemini</text>
-              <text x="460" y="459" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">3/9</text>
-              <text x="650" y="459" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">33.3%</text>
-              <text x="820" y="459" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">1.754s</text>
+              <text x="460" y="459" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">3/3</text>
+              <text x="650" y="459" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">100.0%</text>
+              <text x="820" y="459" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">2.119s</text>
             </g>
             
             <g>
@@ -75,9 +75,9 @@
               <text x="76" y="519" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">eu-frankfurt-1</text>
               <rect x="292" y="499" width="98" height="28" rx="14" fill="#ccfbf1"/>
               <text x="341" y="518" text-anchor="middle" fill="#115e59" font-size="15" font-weight="700" font-family="Arial, sans-serif">openai</text>
-              <text x="460" y="519" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">9/9</text>
+              <text x="460" y="519" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">3/3</text>
               <text x="650" y="519" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">100.0%</text>
-              <text x="820" y="519" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">1.704s</text>
+              <text x="820" y="519" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">1.726s</text>
             </g>
             
             <g>
@@ -85,9 +85,9 @@
               <text x="76" y="579" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">us-chicago-1</text>
               <rect x="292" y="559" width="98" height="28" rx="14" fill="#fef3c7"/>
               <text x="341" y="578" text-anchor="middle" fill="#92400e" font-size="15" font-weight="700" font-family="Arial, sans-serif">gemini</text>
-              <text x="460" y="579" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">9/9</text>
+              <text x="460" y="579" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">3/3</text>
               <text x="650" y="579" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">100.0%</text>
-              <text x="820" y="579" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">3.758s</text>
+              <text x="820" y="579" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">2.890s</text>
             </g>
             
             <g>
@@ -95,9 +95,9 @@
               <text x="76" y="639" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">us-chicago-1</text>
               <rect x="292" y="619" width="98" height="28" rx="14" fill="#ccfbf1"/>
               <text x="341" y="638" text-anchor="middle" fill="#115e59" font-size="15" font-weight="700" font-family="Arial, sans-serif">openai</text>
-              <text x="460" y="639" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">9/9</text>
+              <text x="460" y="639" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">3/3</text>
               <text x="650" y="639" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">100.0%</text>
-              <text x="820" y="639" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">1.642s</text>
+              <text x="820" y="639" fill="#1d1b18" font-size="17" font-family="Arial, sans-serif">1.800s</text>
             </g>
             
   <text x="56" y="686" fill="#5a534b" font-size="18" font-family="Arial, sans-serif">OpenAI is currently stable across Osaka, Chicago, and Frankfurt. Gemini remains region- and prompt-sensitive.</text>
