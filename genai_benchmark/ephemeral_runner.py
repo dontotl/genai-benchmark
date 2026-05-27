@@ -7,6 +7,7 @@ import json
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass, replace
@@ -185,11 +186,13 @@ def benchmark_args(config: RunnerConfig, runner: Runner) -> list[str]:
     )
     if benchmark.get("streaming"):
         args.append("--streaming")
+    if benchmark.get("ttft_only"):
+        args.append("--ttft-only")
     if benchmark.get("load_test"):
         args.append("--load-test")
     if benchmark.get("include_experimental"):
         args.append("--include-experimental")
-    for key in ("temperature", "max_tokens"):
+    for key in ("temperature", "max_tokens", "request_timeout"):
         if key in benchmark:
             args.extend([f"--{key.replace('_', '-')}", str(benchmark[key])])
     for family in benchmark.get("families", []):
@@ -220,6 +223,7 @@ def render_cloud_init(config: RunnerConfig, runner: Runner, template_path: Path 
         "__SOURCE_LABEL__": quote_env(runner.source_label),
         "__REPORT_NAME__": quote_env(report_name(config, runner)),
         "__COMPLETION_MARKER__": quote_env(completion_marker_name(config, runner)),
+        "__PROGRESS_PREFIX__": quote_env(progress_prefix(config, runner)),
         "__BUCKET_NAME__": quote_env(config.bucket_name),
         "__OBJECT_STORAGE_REGION__": quote_env(config.object_storage_region),
         "__REPO_URL__": quote_env(config.repo_url),
@@ -640,6 +644,14 @@ def completion_marker_name(config: RunnerConfig, runner: Runner) -> str:
     return object_name(runner, f"_{report_name(config, runner)}.complete.txt")
 
 
+def progress_prefix(config: RunnerConfig, runner: Runner) -> str:
+    return object_name(runner, f"progress/{report_name(config, runner)}/")
+
+
+def progress_status_name(config: RunnerConfig, runner: Runner) -> str:
+    return f"{progress_prefix(config, runner)}status.json"
+
+
 def object_head_command(config: RunnerConfig, runner: Runner) -> list[str]:
     return [
         *oci_base(config),
@@ -673,6 +685,55 @@ def object_get_command(config: RunnerConfig, runner: Runner, extension: str, out
     ]
 
 
+def progress_status_get_command(config: RunnerConfig, runner: Runner, output_path: Path) -> list[str]:
+    return [
+        *oci_base(config),
+        "os",
+        "object",
+        "get",
+        "--region",
+        config.object_storage_region,
+        "--bucket-name",
+        config.bucket_name,
+        "--name",
+        progress_status_name(config, runner),
+        "--file",
+        str(output_path),
+    ]
+
+
+def progress_object_list_command(config: RunnerConfig, runner: Runner) -> list[str]:
+    return [
+        *oci_base(config),
+        "os",
+        "object",
+        "list",
+        "--region",
+        config.object_storage_region,
+        "--bucket-name",
+        config.bucket_name,
+        "--prefix",
+        progress_prefix(config, runner),
+        "--all",
+    ]
+
+
+def progress_object_delete_command(config: RunnerConfig, object_name_value: str) -> list[str]:
+    return [
+        *oci_base(config),
+        "os",
+        "object",
+        "delete",
+        "--region",
+        config.object_storage_region,
+        "--bucket-name",
+        config.bucket_name,
+        "--name",
+        object_name_value,
+        "--force",
+    ]
+
+
 def shell_join(command: Sequence[str]) -> str:
     return " ".join(shlex.quote(part) for part in command)
 
@@ -688,6 +749,56 @@ def run_command(command: Sequence[str], check: bool = True) -> subprocess.Comple
             details.append(f"stderr:\n{exc.stderr.strip()}")
         suffix = "\n" + "\n".join(details) if details else ""
         raise RuntimeError(f"Command failed with exit code {exc.returncode}: {shell_join(command)}{suffix}") from exc
+
+
+def parse_object_names(output: str) -> list[str]:
+    payload = json.loads(output)
+    data = payload.get("data", [])
+    if isinstance(data, dict):
+        objects = data.get("objects", [])
+    else:
+        objects = data
+    names = []
+    for item in objects:
+        if isinstance(item, dict) and item.get("name"):
+            names.append(str(item["name"]))
+    return names
+
+
+def read_progress_status(config: RunnerConfig, runner: Runner) -> dict[str, Any] | None:
+    with tempfile.TemporaryDirectory() as raw_dir:
+        status_path = Path(raw_dir) / "status.json"
+        result = run_command(progress_status_get_command(config, runner, status_path), check=False)
+        if result.returncode != 0 or not status_path.exists():
+            return None
+        try:
+            payload = json.loads(status_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+
+def cleanup_progress_objects(config: RunnerConfig, runner: Runner, dry_run: bool) -> None:
+    list_command = progress_object_list_command(config, runner)
+    if dry_run:
+        print(shell_join(list_command))
+        print(f"# Would delete objects under {progress_prefix(config, runner)}")
+        return
+
+    result = run_command(list_command, check=False)
+    if result.returncode != 0:
+        print(f"Warning: unable to list progress objects for {runner.source_label}.", file=sys.stderr)
+        return
+    try:
+        object_names = parse_object_names(result.stdout)
+    except Exception as exc:
+        print(f"Warning: unable to parse progress object list for {runner.source_label}: {exc}", file=sys.stderr)
+        return
+
+    for object_name_value in object_names:
+        delete_result = run_command(progress_object_delete_command(config, object_name_value), check=False)
+        if delete_result.returncode != 0:
+            print(f"Warning: unable to delete progress object {object_name_value}.", file=sys.stderr)
 
 
 def parse_instance_id(output: str) -> str:
@@ -811,6 +922,7 @@ def run_managed_runner(
     poll_interval: int,
     timeout_seconds: int,
     keep_on_failure: bool,
+    keep_progress_logs: bool,
     dry_run: bool,
 ) -> None:
     resources = provision_managed_network(config, runner, dry_run)
@@ -823,12 +935,14 @@ def run_managed_runner(
     try:
         wait_for_completion(config, managed_runner, poll_interval, timeout_seconds, dry_run)
         collect_reports(config, managed_runner, output_dir, dry_run)
+        if not keep_progress_logs:
+            cleanup_progress_objects(config, managed_runner, dry_run)
     except Exception:
         if keep_on_failure:
             if not dry_run:
                 save_resource_state(state_path, managed_runner, resources)
             print(f"Keeping managed resources for inspection. State: {state_path}", file=sys.stderr)
-            raise
+        print(f"Progress logs retained at Object Storage prefix: {progress_prefix(config, managed_runner)}", file=sys.stderr)
         raise
     finally:
         if not keep_on_failure:
@@ -847,10 +961,20 @@ def wait_for_completion(
         print(shell_join(command))
         return
     deadline = time.monotonic() + timeout_seconds
+    last_status_text = ""
     while time.monotonic() < deadline:
         result = run_command(command, check=False)
         if result.returncode == 0:
             return
+        status = read_progress_status(config, runner)
+        if status:
+            status_text = (
+                f"{runner.source_label}: stage={status.get('stage', '-')} "
+                f"updated_at={status.get('updated_at', '-')} detail={status.get('detail', '-')}"
+            )
+            if status_text != last_status_text:
+                print(status_text, file=sys.stderr)
+                last_status_text = status_text
         time.sleep(poll_interval)
     raise TimeoutError(f"Timed out waiting for Object Storage marker: {completion_marker_name(config, runner)}")
 
@@ -1007,6 +1131,7 @@ def run_managed_suite(
     poll_interval: int,
     timeout_seconds: int,
     keep_on_failure: bool,
+    keep_progress_logs: bool,
     dry_run: bool,
     parallelism: int,
     name: str,
@@ -1025,6 +1150,7 @@ def run_managed_suite(
                 poll_interval,
                 timeout_seconds,
                 keep_on_failure,
+                keep_progress_logs,
                 dry_run=True,
             )
             print()
@@ -1047,6 +1173,7 @@ def run_managed_suite(
                 poll_interval,
                 timeout_seconds,
                 keep_on_failure,
+                keep_progress_logs,
                 False,
             ): runner
             for runner in runners
@@ -1110,16 +1237,19 @@ def run_runner(
     poll_interval: int,
     timeout_seconds: int,
     keep_on_failure: bool,
+    keep_progress_logs: bool,
     dry_run: bool,
 ) -> None:
     instance_id = launch_runner(config, runner, dry_run)
     try:
         wait_for_completion(config, runner, poll_interval, timeout_seconds, dry_run)
         collect_reports(config, runner, output_dir, dry_run)
+        if not keep_progress_logs:
+            cleanup_progress_objects(config, runner, dry_run)
     except Exception:
         if instance_id and keep_on_failure:
             print(f"Keeping failed runner for inspection: {instance_id}", file=sys.stderr)
-            raise
+        print(f"Progress logs retained at Object Storage prefix: {progress_prefix(config, runner)}", file=sys.stderr)
         raise
     finally:
         if instance_id and not keep_on_failure:
@@ -1160,6 +1290,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--docs-dir", default="docs", help="Where docs artifacts are written after run-managed-suite.")
     parser.add_argument("--no-publish-site", action="store_true", help="Skip docs dashboard generation after run-managed-suite.")
     parser.add_argument("--keep-on-failure", action="store_true")
+    parser.add_argument("--keep-progress-logs", action="store_true", help="Keep Object Storage progress logs after successful report collection.")
     parser.add_argument("--dry-run", action="store_true", help="Print OCI commands without executing them.")
     return parser.parse_args()
 
@@ -1202,6 +1333,7 @@ def main() -> int:
             args.poll_interval,
             args.timeout_seconds,
             args.keep_on_failure,
+            args.keep_progress_logs,
             args.dry_run,
             args.parallelism,
             suite_name(config, args.suite_name),
@@ -1216,6 +1348,8 @@ def main() -> int:
         elif args.action == "collect":
             wait_for_completion(config, runner, args.poll_interval, args.timeout_seconds, args.dry_run)
             collect_reports(config, runner, output_dir, args.dry_run)
+            if not args.keep_progress_logs:
+                cleanup_progress_objects(config, runner, args.dry_run)
         elif args.action == "run":
             run_runner(
                 config,
@@ -1224,6 +1358,7 @@ def main() -> int:
                 args.poll_interval,
                 args.timeout_seconds,
                 args.keep_on_failure,
+                args.keep_progress_logs,
                 args.dry_run,
             )
         elif args.action == "provision-network":
@@ -1237,6 +1372,7 @@ def main() -> int:
                 args.poll_interval,
                 args.timeout_seconds,
                 args.keep_on_failure,
+                args.keep_progress_logs,
                 args.dry_run,
             )
     return 0

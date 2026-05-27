@@ -81,9 +81,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument(
+        "--request-timeout",
+        type=float,
+        default=30.0,
+        help="Per-request timeout in seconds for OCI Generative AI calls.",
+    )
+    parser.add_argument(
         "--streaming",
         action="store_true",
         help="Use streaming responses to measure TTFT and post-TTFT output tokens/sec.",
+    )
+    parser.add_argument(
+        "--ttft-only",
+        action="store_true",
+        help="Use streaming only until the first non-empty chunk, then record TTFT and stop.",
     )
     parser.add_argument(
         "--load-test",
@@ -102,6 +113,11 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         default="runs",
         help="Directory where JSON and Markdown reports will be written.",
+    )
+    parser.add_argument(
+        "--progress-file",
+        default="",
+        help="Optional JSONL file where per-invocation progress events are appended.",
     )
     parser.add_argument(
         "--report-name",
@@ -177,7 +193,9 @@ def build_benchmark_config(args: argparse.Namespace, prompt_path: Path, regions:
         "concurrency_levels": getattr(args, "resolved_concurrency_levels", [args.concurrency]),
         "temperature": args.temperature,
         "max_tokens": args.max_tokens,
+        "request_timeout": args.request_timeout,
         "streaming": args.streaming,
+        "ttft_only": args.ttft_only,
         "load_test": args.load_test,
         "families": args.families or list(DEFAULT_FAMILIES),
         "models": args.models or [],
@@ -216,6 +234,7 @@ def print_dry_run(
         print(f"- {model.model_id} [{model.family}]")
     print(f"Concurrency levels: {', '.join(str(level) for level in concurrency_levels)}")
     print(f"Streaming: {'yes' if args.streaming else 'no'}")
+    print(f"TTFT only: {'yes' if getattr(args, 'ttft_only', False) else 'no'}")
     print(f"Load test mode: {'yes' if args.load_test else 'no'}")
     print(f"Runnable region/model targets: {len(execution_targets)}")
     print(
@@ -247,6 +266,8 @@ def main() -> int:
     if args.list_models:
         print(format_model_listing())
         return 0
+    if args.ttft_only:
+        args.streaming = True
     args.resolved_concurrency_levels = parse_concurrency_levels(args.concurrency_levels, args.concurrency)
 
     selected_models = resolve_models(args.families, args.models, args.include_experimental)

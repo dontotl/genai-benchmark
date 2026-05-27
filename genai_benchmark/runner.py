@@ -143,10 +143,12 @@ def make_llm(args: Any, region: str, model: str) -> Any:
         base_url=build_base_url(region),
         temperature=args.temperature,
         max_tokens=args.max_tokens,
+        request_timeout=args.request_timeout,
+        max_retries=0,
         http_client=httpx.Client(
             auth=auth,
             headers={"CompartmentId": args.compartment_id},
-            timeout=120.0,
+            timeout=args.request_timeout,
         ),
     )
 
@@ -228,6 +230,22 @@ def invoke_streaming(llm: Any, prompt_messages: Sequence[Any]) -> tuple[Any, str
     if response is None:
         raise RuntimeError("Streaming response produced no chunks.")
     return response, "".join(content_parts), ttft_seconds
+
+
+def invoke_ttft_only(llm: Any, prompt_messages: Sequence[Any]) -> tuple[Any, str, float]:
+    stream = llm.stream(prompt_messages)
+    start = time.perf_counter()
+    try:
+        for chunk in stream:
+            chunk_text = content_to_text(getattr(chunk, "content", ""))
+            if not chunk_text:
+                continue
+            return chunk, chunk_text, time.perf_counter() - start
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
+    raise RuntimeError("Streaming response produced no non-empty chunks before completion.")
 
 
 def extract_request_id(headers: Any) -> str | None:
@@ -316,6 +334,60 @@ def plan_execution_matrix(
     return runnable, skipped
 
 
+def emit_progress_event(args: Any, event: dict[str, Any]) -> None:
+    progress_file = getattr(args, "progress_file", "")
+    if not progress_file:
+        return
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **event,
+    }
+    path = Path(progress_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def progress_start_event(
+    region: str,
+    spec: ModelSpec,
+    case: BenchmarkCase,
+    iteration: int,
+    concurrency: int,
+    streaming: bool,
+    ttft_only: bool,
+) -> dict[str, Any]:
+    return {
+        "event": "start",
+        "region": region,
+        "model": spec.model_id,
+        "family": spec.family,
+        "case_id": case.case_id,
+        "iteration": iteration,
+        "concurrency": concurrency,
+        "streaming": streaming,
+        "ttft_only": ttft_only,
+    }
+
+
+def progress_finish_event(result: RunResult, ttft_only: bool) -> dict[str, Any]:
+    return {
+        "event": "finish",
+        "region": result.region,
+        "model": result.model,
+        "family": result.family,
+        "case_id": result.case_id,
+        "iteration": result.iteration,
+        "concurrency": result.concurrency,
+        "streaming": result.streaming,
+        "ttft_only": ttft_only,
+        "latency_seconds": round(result.latency_seconds, 3),
+        "success": result.error is None,
+        "error_type": result.error_type,
+        "http_status": result.http_status,
+    }
+
+
 def run_single_invocation(
     region: str,
     spec: ModelSpec,
@@ -325,17 +397,22 @@ def run_single_invocation(
     llm_factory: Callable[[], Any],
     prompt_messages: Sequence[Any],
     streaming: bool,
+    ttft_only: bool = False,
 ) -> RunResult:
     try:
         llm = llm_factory()
         start = time.perf_counter()
-        if streaming:
+        if ttft_only:
+            response, content, ttft_seconds = invoke_ttft_only(llm, prompt_messages)
+            latency = ttft_seconds
+        elif streaming:
             response, content, ttft_seconds = invoke_streaming(llm, prompt_messages)
+            latency = time.perf_counter() - start
         else:
             response = llm.invoke(prompt_messages)
             ttft_seconds = None
             content = content_to_text(getattr(response, "content", ""))
-        latency = time.perf_counter() - start
+            latency = time.perf_counter() - start
         input_tokens, output_tokens, total_tokens = extract_usage(response)
         output_tokens_per_second = (
             round(output_tokens / latency, 3) if output_tokens is not None and latency > 0 else None
@@ -401,7 +478,8 @@ def run_benchmark(
 ) -> List[RunResult]:
     results: List[RunResult] = []
     concurrency_levels = getattr(args, "resolved_concurrency_levels", [args.concurrency])
-    streaming = bool(getattr(args, "streaming", False))
+    ttft_only = bool(getattr(args, "ttft_only", False))
+    streaming = bool(getattr(args, "streaming", False) or ttft_only)
     load_test = bool(getattr(args, "load_test", False))
 
     for spec, region in execution_targets:
@@ -413,23 +491,33 @@ def run_benchmark(
                 iterations = range(1, invocation_count + 1)
                 if concurrency <= 1:
                     for iteration in iterations:
-                        results.append(
-                            run_single_invocation(
-                                region,
-                                spec,
-                                case,
-                                iteration,
-                                concurrency,
-                                llm_factory,
-                                prompt_messages,
-                                streaming,
-                            )
+                        emit_progress_event(
+                            args,
+                            progress_start_event(region, spec, case, iteration, concurrency, streaming, ttft_only),
                         )
+                        result = run_single_invocation(
+                            region,
+                            spec,
+                            case,
+                            iteration,
+                            concurrency,
+                            llm_factory,
+                            prompt_messages,
+                            streaming,
+                            ttft_only,
+                        )
+                        results.append(result)
+                        emit_progress_event(args, progress_finish_event(result, ttft_only))
                     continue
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-                    future_map = {
-                        executor.submit(
+                    future_map = {}
+                    for iteration in iterations:
+                        emit_progress_event(
+                            args,
+                            progress_start_event(region, spec, case, iteration, concurrency, streaming, ttft_only),
+                        )
+                        future = executor.submit(
                             run_single_invocation,
                             region,
                             spec,
@@ -439,11 +527,13 @@ def run_benchmark(
                             llm_factory,
                             prompt_messages,
                             streaming,
-                        ): iteration
-                        for iteration in iterations
-                    }
+                            ttft_only,
+                        )
+                        future_map[future] = iteration
                     for future in concurrent.futures.as_completed(future_map):
-                        results.append(future.result())
+                        result = future.result()
+                        results.append(result)
+                        emit_progress_event(args, progress_finish_event(result, ttft_only))
     return results
 
 

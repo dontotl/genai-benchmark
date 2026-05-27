@@ -19,7 +19,12 @@ from genai_benchmark.ephemeral_runner import (
     load_config,
     object_get_command,
     object_head_command,
+    parse_object_names,
     policy_create_command,
+    progress_object_delete_command,
+    progress_object_list_command,
+    progress_prefix,
+    progress_status_name,
     run_managed_suite,
     security_list_create_command,
     suite_state_path,
@@ -133,11 +138,14 @@ class EphemeralRunnerCommandTest(unittest.TestCase):
     def test_builds_load_test_benchmark_args(self) -> None:
         payload = sample_config()
         payload["benchmark"]["load_test"] = True
+        payload["benchmark"]["request_timeout"] = 10
         config = load_config(write_config(payload))
 
         args = benchmark_args(config, config.runners[0])
 
         self.assertIn("--load-test", args)
+        self.assertIn("--request-timeout", args)
+        self.assertIn("10", args)
 
     def test_renders_cloud_init_with_user_principal_profile(self) -> None:
         config = load_config(write_config(sample_config()))
@@ -177,6 +185,42 @@ class EphemeralRunnerCommandTest(unittest.TestCase):
         self.assertIn("oci os ns get --auth instance_principal", rendered)
         self.assertIn("--auth instance_principal", rendered)
         self.assertIn("COMPLETION_MARKER=runs/ap-osaka-runner/_ap-osaka-runner-global-r3.complete.txt", rendered)
+        self.assertIn("PROGRESS_PREFIX=runs/ap-osaka-runner/progress/ap-osaka-runner-global-r3/", rendered)
+        self.assertIn("--progress-file", rendered)
+
+    def test_progress_object_names_and_cleanup_commands(self) -> None:
+        config = load_config(write_config(sample_config()))
+        runner = config.runners[0]
+
+        self.assertEqual(
+            progress_prefix(config, runner),
+            "runs/ap-osaka-runner/progress/ap-osaka-runner-global-r3/",
+        )
+        self.assertEqual(
+            progress_status_name(config, runner),
+            "runs/ap-osaka-runner/progress/ap-osaka-runner-global-r3/status.json",
+        )
+        self.assertIn(progress_prefix(config, runner), progress_object_list_command(config, runner))
+        self.assertIn("runs/ap-osaka-runner/progress/ap-osaka-runner-global-r3/status.json", progress_object_delete_command(config, progress_status_name(config, runner)))
+
+    def test_parses_object_list_shapes(self) -> None:
+        self.assertEqual(
+            parse_object_names(
+                json.dumps(
+                    {
+                        "data": [
+                            {"name": "runs/a/progress/r/status.json"},
+                            {"name": "runs/a/progress/r/benchmark.log"},
+                        ]
+                    }
+                )
+            ),
+            ["runs/a/progress/r/status.json", "runs/a/progress/r/benchmark.log"],
+        )
+        self.assertEqual(
+            parse_object_names(json.dumps({"data": {"objects": [{"name": "nested"}]}})),
+            ["nested"],
+        )
 
     def test_completion_marker_is_report_specific(self) -> None:
         config = load_config(write_config(sample_config()))
@@ -331,6 +375,7 @@ class EphemeralRunnerCommandTest(unittest.TestCase):
                 poll_interval=30,
                 timeout_seconds=3600,
                 keep_on_failure=False,
+                keep_progress_logs=False,
                 dry_run=True,
                 parallelism=3,
                 name="global-r3",

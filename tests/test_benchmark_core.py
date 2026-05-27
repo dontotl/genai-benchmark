@@ -17,6 +17,7 @@ from genai_benchmark.runner import (
     aggregate_results,
     extract_failure_details,
     invoke_streaming,
+    invoke_ttft_only,
     load_cases,
     make_thread_local_llm_factory,
     run_benchmark,
@@ -182,6 +183,39 @@ class StreamingInvocationTest(unittest.TestCase):
         self.assertEqual(response.content, "hello world")
         self.assertIsNotNone(ttft)
 
+    def test_invoke_ttft_only_returns_first_non_empty_chunk_and_closes_stream(self) -> None:
+        class Chunk:
+            def __init__(self, content: str) -> None:
+                self.content = content
+
+        class Stream:
+            closed = False
+
+            def __iter__(self) -> "Stream":
+                self._items = iter([Chunk(""), Chunk("first"), Chunk("second")])
+                return self
+
+            def __next__(self) -> Chunk:
+                return next(self._items)
+
+            def close(self) -> None:
+                self.closed = True
+
+        class FakeLlm:
+            def __init__(self) -> None:
+                self.stream_obj = Stream()
+
+            def stream(self, _messages: list[object]) -> Stream:
+                return self.stream_obj
+
+        llm = FakeLlm()
+        response, content, ttft = invoke_ttft_only(llm, [])
+
+        self.assertEqual(response.content, "first")
+        self.assertEqual(content, "first")
+        self.assertGreaterEqual(ttft, 0.0)
+        self.assertTrue(llm.stream_obj.closed)
+
 
 class ThreadLocalFactoryTest(unittest.TestCase):
     def test_factory_reuses_per_thread_but_not_across_threads(self) -> None:
@@ -228,6 +262,7 @@ class RunBenchmarkLoadTest(unittest.TestCase):
             _llm_factory: object,
             _prompt_messages: object,
             streaming: bool,
+            ttft_only: bool = False,
         ) -> RunResult:
             return RunResult(
                 region=region,
@@ -296,6 +331,7 @@ class RunBenchmarkLoadTest(unittest.TestCase):
             _llm_factory: object,
             _prompt_messages: object,
             streaming: bool,
+            ttft_only: bool = False,
         ) -> RunResult:
             return make_result(concurrency=concurrency, iteration=iteration, latency=0.1, output_tokens=1, streaming=streaming)
 
@@ -321,6 +357,79 @@ class RunBenchmarkLoadTest(unittest.TestCase):
 
         self.assertEqual(len(results), 2)
         self.assertEqual([result.concurrency for result in results], [1, 10])
+
+    def test_writes_progress_events_when_progress_file_is_set(self) -> None:
+        original_factory = runner_module.make_thread_local_llm_factory
+        original_run_single = runner_module.run_single_invocation
+        original_to_messages = runner_module.to_langchain_messages
+        spec = ModelSpec("openai.gpt-oss-20b", "openai", "OpenAI gpt-oss-20b", ("ap-osaka-1",))
+        case = BenchmarkCase("summary-ko", [{"role": "user", "content": "테스트"}])
+
+        def fake_factory(_args: object, _region: str, _model: str) -> object:
+            return object
+
+        def fake_run_single(
+            region: str,
+            model_spec: ModelSpec,
+            benchmark_case: BenchmarkCase,
+            iteration: int,
+            concurrency: int,
+            _llm_factory: object,
+            _prompt_messages: object,
+            streaming: bool,
+            ttft_only: bool = False,
+        ) -> RunResult:
+            return RunResult(
+                region=region,
+                model=model_spec.model_id,
+                family=model_spec.family,
+                case_id=benchmark_case.case_id,
+                iteration=iteration,
+                concurrency=concurrency,
+                latency_seconds=0.2,
+                ttft_seconds=None,
+                input_tokens=1,
+                output_tokens=1,
+                total_tokens=2,
+                output_tokens_per_second=5.0,
+                post_ttft_output_tokens_per_second=None,
+                streaming=streaming,
+                response_preview="ok",
+                error=None,
+                error_type=None,
+                http_status=None,
+                response_body_preview=None,
+                request_id=None,
+            )
+
+        runner_module.make_thread_local_llm_factory = fake_factory
+        runner_module.run_single_invocation = fake_run_single
+        runner_module.to_langchain_messages = lambda messages: messages
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                progress_path = Path(tmp_dir) / "progress.jsonl"
+                run_benchmark(
+                    SimpleNamespace(
+                        repeats=1,
+                        concurrency=1,
+                        resolved_concurrency_levels=[1],
+                        streaming=False,
+                        ttft_only=False,
+                        load_test=False,
+                        progress_file=str(progress_path),
+                    ),
+                    [case],
+                    [(spec, "ap-osaka-1")],
+                )
+                events = [json.loads(line) for line in progress_path.read_text(encoding="utf-8").splitlines()]
+        finally:
+            runner_module.make_thread_local_llm_factory = original_factory
+            runner_module.run_single_invocation = original_run_single
+            runner_module.to_langchain_messages = original_to_messages
+
+        self.assertEqual([event["event"] for event in events], ["start", "finish"])
+        self.assertEqual(events[0]["model"], "openai.gpt-oss-20b")
+        self.assertTrue(events[1]["success"])
 
 
 class FailureDetailsTest(unittest.TestCase):

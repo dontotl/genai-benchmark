@@ -10,6 +10,60 @@ cat >/tmp/genai-benchmark-runner.sh <<'RUNNER_SCRIPT'
 set -euo pipefail
 
 export PATH="${HOME}/.local/bin:${PATH}"
+PROGRESS_DIR=/tmp/genai-benchmark-progress
+STATUS_FILE="${PROGRESS_DIR}/status.json"
+BENCHMARK_LOG="${PROGRESS_DIR}/benchmark.log"
+PROGRESS_FILE="${PROGRESS_DIR}/progress.jsonl"
+mkdir -p "${PROGRESS_DIR}"
+touch "${BENCHMARK_LOG}" "${PROGRESS_FILE}"
+
+update_status() {
+  local stage="$1"
+  local detail="${2:-}"
+  python3.11 - "$STATUS_FILE" "$SOURCE_LABEL" "$REPORT_NAME" "$stage" "$detail" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+
+path, source_label, report_name, stage, detail = sys.argv[1:6]
+payload = {
+    "source_label": source_label,
+    "report_name": report_name,
+    "stage": stage,
+    "detail": detail,
+    "updated_at": datetime.now(timezone.utc).isoformat(),
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, ensure_ascii=False, indent=2)
+PY
+}
+
+upload_progress_objects() {
+  for item in \
+    "status.json:${STATUS_FILE}" \
+    "benchmark.log:${BENCHMARK_LOG}" \
+    "progress.jsonl:${PROGRESS_FILE}"
+  do
+    local name="${item%%:*}"
+    local file="${item#*:}"
+    if [ -f "${file}" ]; then
+      oci os object put \
+        --region "${OBJECT_STORAGE_REGION}" \
+        __OCI_AUTH_ARGS__ \
+        --bucket-name "${BUCKET_NAME}" \
+        --name "${PROGRESS_PREFIX}${name}" \
+        --file "${file}" \
+        --force >/dev/null 2>&1 || true
+    fi
+  done
+}
+
+start_progress_uploader() {
+  while true; do
+    upload_progress_objects
+    sleep 30
+  done
+}
 
 if ! command -v oci >/dev/null 2>&1; then
   python3.11 -m pip install --user oci-cli
@@ -26,17 +80,35 @@ for attempt in $(seq 1 30); do
   sleep 10
 done
 
+update_status "bootstrapping" "OCI authentication is ready."
+upload_progress_objects
+start_progress_uploader &
+UPLOADER_PID=$!
+trap 'kill "${UPLOADER_PID}" >/dev/null 2>&1 || true' EXIT
+
+update_status "cloning_repo" "Cloning benchmark repository."
 rm -rf "${WORK_DIR}"
 git clone --branch "${REPO_REF}" "${REPO_URL}" "${WORK_DIR}"
 cd "${WORK_DIR}"
 
+update_status "installing_dependencies" "Creating virtualenv and installing Python dependencies."
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
 pip install -r requirements.txt
 
-python benchmark.py __BENCHMARK_ARGS__
+update_status "running_benchmark" "Benchmark is running."
+set +e
+python benchmark.py __BENCHMARK_ARGS__ --progress-file "${PROGRESS_FILE}" >"${BENCHMARK_LOG}" 2>&1
+benchmark_exit=$?
+set -e
+if [ "${benchmark_exit}" -ne 0 ]; then
+  update_status "failed" "benchmark.py exited with ${benchmark_exit}."
+  upload_progress_objects
+  exit "${benchmark_exit}"
+fi
 
+update_status "uploading_reports" "Uploading benchmark reports."
 oci os object put \
   --region "${OBJECT_STORAGE_REGION}" \
   __OCI_AUTH_ARGS__ \
@@ -52,6 +124,9 @@ oci os object put \
   --name "runs/${SOURCE_LABEL}/${REPORT_NAME}.md" \
   --file "runs/${REPORT_NAME}.md" \
   --force
+
+update_status "completed" "Benchmark reports uploaded."
+upload_progress_objects
 
 printf "completed\n" > /tmp/benchmark-complete.txt
 oci os object put \
@@ -70,6 +145,7 @@ sudo -iu "__RUNNER_USER__" env \
   SOURCE_LABEL=__SOURCE_LABEL__ \
   REPORT_NAME=__REPORT_NAME__ \
   COMPLETION_MARKER=__COMPLETION_MARKER__ \
+  PROGRESS_PREFIX=__PROGRESS_PREFIX__ \
   BUCKET_NAME=__BUCKET_NAME__ \
   OBJECT_STORAGE_REGION=__OBJECT_STORAGE_REGION__ \
   REPO_URL=__REPO_URL__ \
